@@ -1,0 +1,57 @@
+name: Build installers
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  packages:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --locked --release
+      - if: runner.os == 'Windows'
+        run: dotnet tool install --global wix --version 5.0.2
+      - run: python packaging/package.py
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive flathub org.freedesktop.Sdk//25.08 org.freedesktop.Platform//25.08
+          bash packaging/flatpak.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: emerald-${{ matrix.os }}
+          path: |
+            dist/*.msi
+            dist/*.flatpak
+            dist/*.deb
+            dist/*.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: emerald-*
+          path: installers
+          merge-multiple: true
+      - name: Publish tagged release with all seven installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd installers
+          assets=(emerald.msi emerald-server.msi emerald.dmg emerald-server.dmg emerald-amd64.deb emerald-server-amd64.deb emerald.flatpak)
+          for asset in "${assets[@]}"; do test -s "$asset"; done
+          sha256sum "${assets[@]}" > SHA256SUMS
+          gh release create "$TAG" "${assets[@]}" SHA256SUMS --verify-tag --repo "$GITHUB_REPOSITORY" --title "Emerald $TAG" --notes "Rust Markdown client and self-hosted sync server. Install the client on each desktop and the server on the machine that stores the shared vault. Setup instructions are in the README. Installers are unsigned."

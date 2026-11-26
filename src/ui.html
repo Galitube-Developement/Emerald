@@ -1,0 +1,44 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Emerald Vault</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:16px/1.55 system-ui;color:#243d34;background:#fafaf6}main{display:grid;grid-template-columns:minmax(190px,24%) 1fr;min-height:100vh}aside{background:#e9eee7;padding:20px}header,nav{display:flex;gap:8px;align-items:center;flex-wrap:wrap}section{padding:24px clamp(18px,4vw,68px)}h1{font:2em Georgia;margin:8px 0 24px}button,input{font:inherit;border:1px solid #abbcaf;border-radius:5px;background:white;padding:5px 10px}button{cursor:pointer}aside input{width:100%;margin:16px 0}#files button{display:block;width:100%;text-align:left;overflow-wrap:anywhere;border:0;background:transparent}button:hover,#files button[aria-current=true]{background:#cdddcf}textarea,article{width:100%;min-height:55vh;margin:18px 0;padding:20px;border:1px solid #ced8cc;border-radius:6px;background:white;font:1.1em/1.65 Georgia}textarea{resize:vertical}pre{overflow:auto}img{max-width:100%}output{display:block;color:#365b48}h2{overflow-wrap:anywhere}@media(max-width:650px){main{display:block}#files{max-height:130px;overflow:auto}}
+</style><main><aside><h1>Emerald</h1><nav><button id="create">New note</button><button id="sync">Sync</button><button id="setup">Sync settings</button><button id="today">Daily note</button><button id="graph">Graph</button></nav><input id="filter" placeholder="Search notes or #tags" aria-label="Search vault"><div id="files"></div></aside><section><h2 id="title">Open a note</h2><header><button id="save">Save</button><button id="preview">Preview</button><button id="del">Delete</button></header><textarea id="editor" aria-label="Markdown" disabled></textarea><article id="render" hidden></article><output id="status" role="status"></output><div id="links"></div><div id="backlinks"></div><dialog id="settings"><form id="connection"><h2>Sync settings</h2><label>Server URL <input id="serverUrl" required type="url" placeholder="https://notes.example.org/"></label><p><label>Server token <input id="secret" required type="password" autocomplete="off"></label></p><button type="submit">Save connection</button> <button type="button" id="cancel">Cancel</button><output id="settingsError"></output></form></dialog><dialog id="map"><button id="closeMap">Close graph</button><canvas id="net" width="700" height="480"></canvas><div id="legend"></div></dialog></section></main>
+<script>
+const el=id=>document.getElementById(id), editor=el('editor'), statusBox=el('status');
+const token=location.hash.slice(1)||sessionStorage.token;sessionStorage.token=token;history.replaceState(null,'','/');
+let notes={},files={},name='',base='',dirty=false;
+async function api(path,method='GET',body){const r=await fetch(path,{method,headers:{Authorization:'Bearer '+token},body});if(!r.ok)throw Error(await r.text()||r.statusText);return r}
+function uri(n,b){const q=new URLSearchParams({name:n});if(b!==undefined)q.set('base',b);return '/file?'+q}
+function button(label,action){const b=document.createElement('button');b.textContent=label;b.onclick=()=>task(action);return b}
+let busy=false;
+async function task(fn){if(busy)return;busy=true;editor.readOnly=true;try{await fn()}catch(e){statusBox.textContent=e.message}finally{busy=false;editor.readOnly=false}}
+function list(){el('files').replaceChildren();for(const n of Object.keys(files).filter(n=>n.endsWith('.md')&&(n+' '+(notes[n]?.text||'')).toLowerCase().includes(el('filter').value.toLowerCase())).sort()){const b=button(n,()=>openNote(n));b.setAttribute('aria-current',n===name);el('files').append(b)}}
+async function refresh(){files=await(await api('/files')).json();
+ for(const n of Object.keys(notes))if(!(n in files))delete notes[n];
+ for(const [n,hash] of Object.entries(files))if(n.endsWith('.md')&&notes[n]?.hash!==hash)notes[n]={hash,text:await(await api(uri(n))).text()};
+ list()}
+function editing(){editor.hidden=false;el('render').hidden=true;el('preview').textContent='Preview'}
+async function openNote(n){if(dirty&&!confirm('Discard unsaved edits?'))return;await refresh();const data=n in files?await(await api(uri(n))).text():'';name=n;base=files[n]||'';editor.disabled=false;editor.value=data;dirty=!(n in files);el('title').textContent=n;statusBox.textContent=dirty?'New note':'';editing();list();showLinks()}
+function targets(text){return Array.from(text.matchAll(/\[\[([^\]\n]+)\]\]/g),m=>m[1].endsWith('.md')?m[1]:m[1]+'.md')}
+function showLinks(){const incoming=Object.keys(notes).filter(n=>targets(notes[n].text).includes(name));el('backlinks').replaceChildren();if(incoming.length){el('backlinks').append('Linked from ');for(const n of incoming)el('backlinks').append(button(n,()=>openNote(n)))}const links=el('links');links.replaceChildren();for(const match of new Set(Array.from(editor.value.matchAll(/\[\[([^\]\n]+)\]\]/g),m=>m[1]))){links.append(button(match,()=>openNote(match.endsWith('.md')?match:match+'.md')))}}
+async function save(){if(!name)return;await api(uri(name,base),'PUT',editor.value);const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(editor.value));base=Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,'0')).join('');dirty=false;statusBox.textContent='Saved';await refresh()}
+el('create').onclick=()=>task(async()=>{const n=prompt('Note path, for example Projects/Ideas');if(n)await openNote(n.endsWith('.md')?n:n+'.md')});
+el('save').onclick=()=>task(save);editor.oninput=()=>{dirty=true;statusBox.textContent='Unsaved changes';showLinks()};
+el('filter').oninput=list;
+el('del').onclick=()=>task(async()=>{if(name&&confirm('Delete '+name+'?')){await api(uri(name,base),'DELETE');name='';dirty=false;editor.value='';editor.disabled=true;editing();el('title').textContent='Open a note';showLinks();statusBox.textContent='Deleted';await refresh()}});
+el('sync').onclick=()=>task(async()=>{if(dirty)await save();const msg=await(await api('/sync','POST')).text();await refresh();if(name in files)await openNote(name);else{editor.disabled=true;editor.value='';name='';el('title').textContent='Open a note';editing();showLinks()}statusBox.textContent=msg});
+el('preview').onclick=()=>task(async()=>{if(!name)return;if(editor.hidden){editing();return}el('render').innerHTML=await(await api('/preview','POST',editor.value)).text();editor.hidden=true;el('render').hidden=false;el('preview').textContent='Edit'});
+onbeforeunload=e=>{if(dirty){e.preventDefault();e.returnValue=''}};
+onkeydown=e=>{if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();task(save)}};
+el('setup').onclick=()=>el('settings').showModal();el('cancel').onclick=()=>{el('secret').value='';el('settings').close()};
+el('connection').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/connection',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({server:el('serverUrl').value,token:el('secret').value})});if(!r.ok)throw Error(await r.text());el('secret').value='';el('settings').close();statusBox.textContent='Connection saved. Choose Sync to synchronize.'}catch(e){el('settingsError').textContent=e.message}};
+el('today').onclick=()=>task(()=>{const d=new Date();return openNote('Daily/'+d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'.md')});
+el('graph').onclick=()=>task(async()=>{
+ await refresh();const names=Object.keys(notes),canvas=el('net'),c=canvas.getContext('2d');
+ c.clearRect(0,0,canvas.width,canvas.height);const coords=new Map(names.map((n,i)=>[n,[350+260*Math.cos(i*2*Math.PI/names.length),240+185*Math.sin(i*2*Math.PI/names.length)]]));
+ c.strokeStyle='#9caea1';for(const n of names)for(const t of targets(notes[n].text)){if(coords.has(t)){c.beginPath();c.moveTo(...coords.get(n));c.lineTo(...coords.get(t));c.stroke()}}
+ for(const [n,[x,y]] of coords){c.fillStyle='#266c52';c.beginPath();c.arc(x,y,5,0,2*Math.PI);c.fill();c.fillText(n,x+7,y)}
+ el('legend').replaceChildren();for(const n of names)el('legend').append(button(n,async()=>{el('map').close();await openNote(n)}));el('map').showModal()
+});
+el('closeMap').onclick=()=>el('map').close();
+task(refresh);
+</script></html>

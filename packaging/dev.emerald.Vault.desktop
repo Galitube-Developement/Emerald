@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Emerald
+Exec=emerald
+Categories=Office;TextEditor;
+Terminal=false
