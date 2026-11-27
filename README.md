@@ -8,7 +8,7 @@ Install the Emerald client package or run `cargo run --locked --bin emerald`. It
 
     emerald --vault "/path/to/notes"
 
-Create notes using paths such as `Projects/Ideas`. Save with Ctrl+S or Cmd+S. Preview renders Markdown. Follow a `[[Projects/Ideas]]` link using the buttons below the editor, or inspect the graph and backlinks. Search matches paths, text and tags. Daily note opens today's dated entry. You can put binary attachments in the vault using your file manager.
+Create notes using paths such as `Projects/Ideas`. Save with Ctrl+S or Cmd+S. Preview renders Markdown. Follow a `[[Projects/Ideas]]` link using the links above the editor, or inspect the graph and backlinks. Search matches paths, text and tags. Daily note opens today's dated entry. You can put binary attachments in the vault using your file manager.
 
 ## Host your own sync server
 
@@ -44,4 +44,4 @@ On Windows use Python and WiX 5 on PATH. On macOS the script uses pkgbuild and h
 
 ## Current scope
 
-The browser editor, local folders, Markdown preview, note links, backlinks, graph, search, daily notes and manual self-hosted sync are implemented. The client currently loads the Markdown text of the vault to search and build links. Canvas, plugin compatibility, rich embeds, version history, automatic background sync, mobile clients and end-to-end encryption are outside the current implementation.
+The native desktop editor, local folders, Markdown preview, note links, backlinks, graph, search, daily notes and manual self-hosted sync are implemented. The client currently loads the Markdown text of the vault to search and build links. Canvas, plugin compatibility, rich embeds, version history, automatic background sync, mobile clients and end-to-end encryption are outside the current implementation.
