@@ -584,6 +584,17 @@ impl eframe::App for Notebook {
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::W),
             )
         });
+        let (zin, zout, zreset) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Equals) || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Plus),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Minus),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Num0),
+            )
+        });
+        if zin || zout || zreset {
+            let z = if zreset { 1. } else if zin { ctx.zoom_factor() + 0.1 } else { ctx.zoom_factor() - 0.1 };
+            ctx.set_zoom_factor(z.clamp(0.7, 2.0));
+        }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::P)) {
             self.palette = !self.palette;
             self.pal_query.clear();
