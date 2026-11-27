@@ -149,3 +149,21 @@ pub fn run(v: Vault) -> Result<String> {
         "Sync complete. {conflicts} conflicts. Local conflict copies sync on the next pass."
     ))
 }
+pub fn configured(v: &Vault) -> bool {
+    (std::env::var("EMERALD_SERVER").is_ok() && std::env::var("EMERALD_TOKEN").is_ok())
+        || config_file(v).map(|p| p.exists()).unwrap_or(false)
+}
+pub fn test(server: &str, token: &str) -> Result<String> {
+    let url = server_url(server)?;
+    let http = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let n: Index = http
+        .get(url.join("files")?)
+        .bearer_auth(token)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    Ok(format!("Connected. The server holds {} files.", n.len()))
+}

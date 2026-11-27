@@ -8,6 +8,24 @@ Install the Emerald client package or run `cargo run --locked --bin emerald`. It
 
     emerald --vault "/path/to/notes"
 
+### Shortcuts
+
+| Key | Action |
+| --- | --- |
+| Ctrl+N | New note |
+| Ctrl+O or Ctrl+Shift+F | Search (Enter opens the first hit, Esc closes) |
+| Ctrl+G | Toggle graph view |
+| Ctrl+W | Close the current tab |
+| Ctrl+S | Save now (notes also autosave one second after you stop typing) |
+
+Click the note title to rename it. The ... menu next to Edit/Preview holds Save, Rename, Reload from disk and Delete. The vault name and note count are at the bottom left. Backlinks appear on the right only when other notes link to the open one.
+
+### Where things are stored
+
+- Vault: the folder passed with `--vault` (default Documents/Emerald). Notes are plain `.md` files.
+- Sync connection: `%APPDATA%/Emerald/<hash>.json` on Windows (the platform config dir elsewhere), or the `EMERALD_SERVER` and `EMERALD_TOKEN` environment variables.
+- Sync state: `.emerald-sync-*.json` inside the vault.
+
 Create notes using paths such as `Projects/Ideas`. Save with Ctrl+S or Cmd+S. Preview renders Markdown. Follow a `[[Projects/Ideas]]` link using the links above the editor, or inspect the graph and backlinks. Search matches paths, text and tags. Daily note opens today's dated entry. You can put binary attachments in the vault using your file manager.
 
 ## Host your own sync server
