@@ -12,6 +12,8 @@ Create notes using paths such as `Projects/Ideas`. Save with Ctrl+S or Cmd+S. Pr
 
 ## Host your own sync server
 
+See [SERVER_SETUP.md](SERVER_SETUP.md) for platform-specific installation and token setup.
+
 Install the separate Emerald Server package on a machine with persistent storage. Pick a dedicated folder and generate a random shared secret (for example, with a password manager). The service account needs write access to that folder. In a Linux or macOS terminal:
 
     read -rs EMERALD_TOKEN
