@@ -14,6 +14,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cargo build --locked --release
+      - name: Confirm the desktop client opens a native window
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb x11-utils libgl1-mesa-dri libxkbcommon-x11-0
+          xvfb-run -a bash -eu -c '
+            target/release/emerald --vault "$RUNNER_TEMP/emerald-smoke" &
+            pid=$!
+            trap "kill $pid 2>/dev/null || true" EXIT
+            for attempt in {1..60}; do
+              kill -0 "$pid"
+              if xwininfo -root -tree | grep -Fq "\"Emerald\""; then exit 0; fi
+              sleep 1
+            done
+            exit 1
+          '
+
       - if: runner.os == 'Windows'
         run: dotnet tool install --global wix --version 5.0.2
       - run: python packaging/package.py
