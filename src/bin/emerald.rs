@@ -131,6 +131,35 @@ fn svg(name: &str) -> egui::ImageSource<'static> {
         _ => ico!("panel"),
     }
 }
+fn banner_flag(root: &std::path::Path) -> PathBuf {
+    root.join(".emerald-nobanner")
+}
+/// Open `[[` link at the cursor: (char index where the name starts, cursor, typed name).
+fn pick_at(text: &str, cursor: usize) -> Option<(usize, usize, String)> {
+    let before: String = text.chars().take(cursor).collect();
+    let at = before.rfind("[[")?;
+    let q = &before[at + 2..];
+    if q.contains(['\n', ']']) {
+        return None;
+    }
+    Some((before[..at].chars().count() + 2, cursor, q.to_owned()))
+}
+#[cfg(test)]
+mod tests {
+    use super::pick_at;
+    #[test]
+    fn picker_opens_after_double_bracket() {
+        assert_eq!(pick_at("hi [[", 5), Some((5, 5, String::new())));
+        assert_eq!(pick_at("hi [[Wel", 8), Some((5, 8, "Wel".into())));
+        assert_eq!(pick_at("é [[Wé", 6), Some((4, 6, "Wé".into())));
+    }
+    #[test]
+    fn picker_closes_when_link_ends() {
+        assert_eq!(pick_at("[[a]] b", 7), None);
+        assert_eq!(pick_at("[[a\nb", 5), None);
+        assert_eq!(pick_at("plain", 5), None);
+    }
+}
 /// Obsidian-style icon button: 30x28, muted icon, hover/selected background.
 fn ib(ui: &mut egui::Ui, name: &str, tip: &str, on: bool) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(Vec2::new(30., 28.), egui::Sense::click());
@@ -231,6 +260,7 @@ struct Notebook {
     last_edit: Option<Instant>,
     status_err: bool,
     sync_ok: bool,
+    banner_off: bool,
     undo: Option<(String, PathBuf)>,
     palette: bool,
     pal_query: String,
@@ -288,6 +318,7 @@ impl Notebook {
             last_edit: None,
             status_err: false,
             sync_ok: false,
+            banner_off: false,
             undo: None,
             palette: false,
             pal_query: String::new(),
@@ -310,6 +341,7 @@ impl Notebook {
         };
         app.refresh()?;
         app.sync_ok = sync::configured(&app.vault);
+        app.banner_off = banner_flag(&app.vault.root).exists();
         Ok(app)
     }
     fn refresh(&mut self) -> Result<()> {
@@ -698,6 +730,9 @@ impl eframe::App for Notebook {
                     if ib(ui, "today", "Open today's daily note", false).clicked() {
                         open = Some(format!("Daily/{}.md", chrono::Local::now().date_naive()))
                     }
+                    if ib(ui, "pal", "Command palette (Ctrl+P)", self.palette).clicked() {
+                        self.palette = !self.palette
+                    }
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                         if ib(ui, "set", "Sync settings", self.settings).clicked() {
                             self.settings = true
@@ -796,10 +831,7 @@ impl eframe::App for Notebook {
                                 if !title_hit && line.is_none() {
                                     continue;
                                 }
-                                let r = ui.add_sized(
-                                    [ui.available_width(), 20.],
-                                    egui::Button::new(n.trim_end_matches(".md")).frame(*n == self.doc.name).wrap_mode(egui::TextWrapMode::Truncate),
-                                );
+                                let r = ui.selectable_label(*n == self.doc.name, egui::RichText::new(n.trim_end_matches(".md")).strong().color(TEXT));
                                 if r.clicked() {
                                     open = Some(n.clone())
                                 }
@@ -951,11 +983,15 @@ impl eframe::App for Notebook {
                         });
                         return;
                     }
-                    if !self.sync_ok {
+                    if !self.sync_ok && !self.banner_off {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Sync is not set up.").color(MUTED));
-                            if ui.link("Set up sync").clicked() {
+                            if ui.link("Connect my other computer").clicked() {
                                 self.settings = true
+                            }
+                            if ui.add(egui::Button::new(egui::RichText::new("×").color(MUTED)).frame(false)).on_hover_text("Hide").clicked() {
+                                self.banner_off = true;
+                                let _ = fs::write(banner_flag(&self.vault.root), "");
                             }
                         });
                     }
@@ -1077,6 +1113,7 @@ impl eframe::App for Notebook {
                                 let r = ui.add(
                                     egui::TextEdit::multiline(&mut self.doc.text)
                                         .id(eid)
+                                        .hint_text("Start typing… type [[ to link a note")
                                         .desired_width(f32::INFINITY)
                                         .desired_rows(26),
                                 );
@@ -1084,19 +1121,22 @@ impl eframe::App for Notebook {
                                 if let Some(st) = egui::TextEdit::load_state(ui.ctx(), eid) {
                                     cursor = st.cursor.char_range().map(|c| c.primary.index);
                                 }
+                                let before_pick = self.pick.clone();
                                 if r.has_focus() {
-                                    self.pick = cursor.and_then(|c| {
-                                        let before: String = self.doc.text.chars().take(c).collect();
-                                        let at = before.rfind("[[")?;
-                                        let q = &before[at + 2..];
-                                        if q.contains(['\n', ']']) {
-                                            return None;
-                                        }
-                                        Some((before[..at].chars().count() + 2, c, q.to_owned()))
-                                    });
+                                    self.pick = cursor.and_then(|c| pick_at(&self.doc.text, c));
                                 } else if insert.is_none() {
                                     self.pick = None
                                 }
+                                if self.pick != before_pick {
+                                    ui.ctx().request_repaint();
+                                }
+                                let matches: Vec<String> = match &self.pick {
+                                    Some((_, _, q)) => {
+                                        let q = q.to_lowercase();
+                                        self.notes.keys().filter(|n| n.to_lowercase().contains(&q)).take(6).cloned().collect()
+                                    }
+                                    None => Vec::new(),
+                                };
                                 if let (Some((s, c, _)), false) = (self.pick.clone(), matches.is_empty()) {
                                     egui::Area::new(egui::Id::new("pickpop"))
                                         .order(egui::Order::Foreground)
@@ -1255,11 +1295,16 @@ impl eframe::App for Notebook {
         if self.settings {
             let mut win = true;
             egui::Window::new("Sync settings").open(&mut win).show(ctx, |ui| {
-                ui.label("Server URL");
-                ui.text_edit_singleline(&mut self.server);
-                ui.label("Server token");
+                ui.label("Keep your notes the same on two computers.");
+                ui.label(egui::RichText::new("1. On the other computer, start emerald-server and note its address and token.
+2. Paste them below and press Test.
+3. When it says Connected, press Connect.").color(MUTED));
+                ui.add_space(6.);
+                ui.label("Address of the other computer");
+                ui.add(egui::TextEdit::singleline(&mut self.server).hint_text("https://my-server:8080").desired_width(320.));
+                ui.label("Pairing token");
                 ui.add(egui::TextEdit::singleline(&mut self.secret).password(true));
-                if ui.button("Save connection").clicked() {
+                if ui.button("Connect").clicked() {
                     result = sync::configure(
                         &self.vault,
                         sync::Connection {
@@ -1274,7 +1319,7 @@ impl eframe::App for Notebook {
                         self.status = "Connection saved".into()
                     }
                 }
-                if ui.button("Test connection").clicked() {
+                if ui.button("Test").clicked() {
                     let (tx, rx) = mpsc::channel();
                     let (s, t) = (self.server.clone(), self.secret.clone());
                     let c = ctx.clone();
@@ -1349,16 +1394,17 @@ impl eframe::App for Notebook {
                 "Ribbon (left edge): files, search, graph and daily note live here.",
                 "Ctrl+N makes a note. Click its title to rename it; it autosaves.",
                 "Type [[ to link to another note. Ctrl+P opens the command palette.",
-                "The bottom bar shows vault, note count and status. Set up sync with the link in the editor.",
+                "The bottom bar shows vault, note count and status. Ctrl+P also opens the palette from the ribbon.",
             ];
             let mut next = Some(step);
-            egui::Window::new(format!("Tour {}/4", step + 1)).collapsible(false).anchor(egui::Align2::LEFT_BOTTOM, [60., -40.]).show(ctx, |ui| {
+            egui::Window::new(format!("Tour {}/4", step + 1)).collapsible(false).anchor(egui::Align2::LEFT_TOP, [60., 60.]).show(ctx, |ui| {
                 ui.label(STEPS[step]);
                 ui.horizontal(|ui| {
-                    if ui.button(if step == 3 { "Done" } else { "Next" }).clicked() {
+                    ui.spacing_mut().button_padding = Vec2::new(18., 8.);
+                    if ui.button(egui::RichText::new(if step == 3 { "Done" } else { "Next" }).size(15.)).clicked() {
                         next = if step == 3 { None } else { Some(step + 1) }
                     }
-                    if ui.button("Skip").clicked() {
+                    if ui.button(egui::RichText::new("Skip").size(15.)).clicked() {
                         next = None
                     }
                 });
