@@ -4,3 +4,4 @@ Name=Emerald
 Exec=emerald
 Categories=Office;TextEditor;
 Terminal=false
+Icon=emerald

@@ -24,8 +24,19 @@ fn main() -> eframe::Result<()> {
             .unwrap_or_default()
             .join("Emerald")
     });
+    let icon = image::load_from_memory(include_bytes!("../../assets/emerald-256.png"))
+        .expect("valid Emerald app icon")
+        .into_rgba8();
+    let (icon_width, icon_height) = icon.dimensions();
+    let icon = egui::IconData {
+        rgba: icon.into_raw(),
+        width: icon_width,
+        height: icon_height,
+    };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1060., 720.]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1060., 720.])
+            .with_icon(std::sync::Arc::new(icon)),
         ..Default::default()
     };
     eframe::run_native(
@@ -280,6 +291,7 @@ struct Notebook {
     status: String,
     cache: CommonMarkCache,
     pending: Option<mpsc::Receiver<Result<String>>>,
+    last_auto_sync: Instant,
 }
 fn links(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split("[[")
@@ -338,6 +350,7 @@ impl Notebook {
             status: String::new(),
             cache: Default::default(),
             pending: None,
+            last_auto_sync: Instant::now(),
         };
         app.refresh()?;
         app.sync_ok = sync::configured(&app.vault);
@@ -628,7 +641,7 @@ impl eframe::App for Notebook {
         }
         if self.doc.dirty && !busy {
             if let Some(t) = self.last_edit {
-                if t.elapsed() >= Duration::from_millis(1000) {
+                if t.elapsed() >= Duration::from_secs(5) {
                     self.last_edit = None;
                     if let Err(e) = self.save() {
                         self.status = e.to_string();
@@ -638,6 +651,17 @@ impl eframe::App for Notebook {
                     ctx.request_repaint_after(Duration::from_millis(300));
                 }
             }
+        }
+        // Poll and synchronize changes from other clients while the vault is connected.
+        if self.sync_ok && !self.doc.dirty && self.pending.is_none() && self.last_auto_sync.elapsed() >= Duration::from_secs(5) {
+            self.last_auto_sync = Instant::now();
+            if let Err(e) = self.sync(ctx) {
+                self.status = e.to_string();
+                self.status_err = true;
+            }
+        }
+        if self.sync_ok && self.pending.is_none() {
+            ctx.request_repaint_after(Duration::from_millis(500));
         }
         let backlinks: Vec<String> = if self.doc.name.is_empty() {
             Vec::new()
@@ -1316,7 +1340,8 @@ impl eframe::App for Notebook {
                         self.secret.clear();
                         self.settings = false;
                         self.sync_ok = true;
-                        self.status = "Connection saved".into()
+                        self.last_auto_sync = Instant::now();
+                        self.status = "Connection saved. Automatic sync checks every 5 seconds.".into()
                     }
                 }
                 if ui.button("Test").clicked() {

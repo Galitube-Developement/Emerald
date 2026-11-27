@@ -1,5 +1,7 @@
 # Emerald
 
+Publisher: Galitube Productions.
+
 Emerald is a Rust Markdown notebook and an optional self-hosted sync server. Each client keeps a local folder you can open with other editors. The server keeps another copy of the notes and attachments as ordinary files in the directory you select. One server instance serves one shared vault.
 
 ## Open a notebook
@@ -49,7 +51,7 @@ Both commands start a foreground process on 127.0.0.1:7878. On macOS, open the s
         reverse_proxy 127.0.0.1:7878
     }
 
-In each client, open **Sync settings**, enter the HTTPS address and the same token, save the connection and choose **Sync**. For testing on one machine use http://127.0.0.1:7878. The client saves the connection, including the token, in the current user's configuration directory outside the vault. Alternatively supply both EMERALD_SERVER and EMERALD_TOKEN in the client's environment.
+In each client, open **Sync settings**, enter the HTTPS address and the same token, save the connection and choose **Sync**. Connected clients sync automatically after five seconds of inactivity and check for server updates every five seconds. For testing on one machine use http://127.0.0.1:7878. The client saves the connection, including the token, in the current user's configuration directory outside the vault. Alternatively supply both EMERALD_SERVER and EMERALD_TOKEN in the client's environment.
 
 Sync compares file contents against the last sync, including renames (delete and create), attachments and deletions. A concurrent change rejected by the server can be retried. If both clients edited a note offline, the remote version takes its original name and the local edit gets a conflict filename. Review it in the vault. A subsequent sync transfers the conflict copy. A concurrent deletion and edit preserves the edited content. File transfers support up to 64 MiB per upload. Dot-prefixed paths and symlinks are excluded. Use separate directories for client and server, and a single server process per server vault. The server token grants access to the whole vault. Maintain backups independently of sync.
 
@@ -64,4 +66,4 @@ On Windows use Python and WiX 5 on PATH. On macOS the script uses pkgbuild and h
 
 ## Current scope
 
-The native desktop editor, local folders, Markdown preview, note links, backlinks, graph, search, daily notes and manual self-hosted sync are implemented. The client currently loads the Markdown text of the vault to search and build links. Canvas, plugin compatibility, rich embeds, version history, automatic background sync, mobile clients and end-to-end encryption are outside the current implementation.
+The native desktop editor, local folders, Markdown preview, note links, backlinks, graph, search, daily notes and automatic self-hosted sync are implemented. The client currently loads the Markdown text of the vault to search and build links. Canvas, plugin compatibility, rich embeds, version history, mobile clients and end-to-end encryption are outside the current implementation.

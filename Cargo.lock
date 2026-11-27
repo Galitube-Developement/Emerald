@@ -895,7 +895,7 @@ dependencies = [
 
 [[package]]
 name = "emerald"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -906,6 +906,7 @@ dependencies = [
  "egui_commonmark",
  "egui_extras",
  "hex",
+ "image",
  "rand 0.8.8",
  "reqwest",
  "serde",

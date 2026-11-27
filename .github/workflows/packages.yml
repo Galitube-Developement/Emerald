@@ -73,7 +73,16 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           cd installers
-          assets=(emerald.msi emerald-server.msi emerald-arm64.dmg emerald-server-arm64.dmg emerald-x86_64.dmg emerald-server-x86_64.dmg emerald-amd64.deb emerald-server-amd64.deb emerald.flatpak)
+          mv emerald.msi Emerald-Client_Windows_x64.msi
+          mv emerald-server.msi Emerald-Server_Windows_x64.msi
+          mv emerald-arm64.dmg Emerald-Client_macOS_Arm64.dmg
+          mv emerald-server-arm64.dmg Emerald-Server_macOS_Arm64.dmg
+          mv emerald-x86_64.dmg Emerald-Client_macOS_Intel_x64.dmg
+          mv emerald-server-x86_64.dmg Emerald-Server_macOS_Intel_x64.dmg
+          mv emerald-amd64.deb Emerald-Client_Linux_x64.deb
+          mv emerald-server-amd64.deb Emerald-Server_Linux_x64.deb
+          mv emerald.flatpak Emerald-Client_Linux_x64.flatpak
+          assets=(Emerald-Client_Windows_x64.msi Emerald-Server_Windows_x64.msi Emerald-Client_macOS_Arm64.dmg Emerald-Server_macOS_Arm64.dmg Emerald-Client_macOS_Intel_x64.dmg Emerald-Server_macOS_Intel_x64.dmg Emerald-Client_Linux_x64.deb Emerald-Server_Linux_x64.deb Emerald-Client_Linux_x64.flatpak)
           for asset in "${assets[@]}"; do test -s "$asset"; done
           sha256sum "${assets[@]}" > SHA256SUMS
           gh release create "$TAG" "${assets[@]}" SHA256SUMS --verify-tag --repo "$GITHUB_REPOSITORY" --title "Emerald $TAG" --notes "Rust Markdown client and self-hosted sync server. Install the client on each desktop and the server on the machine that stores the shared vault. Setup instructions are in the README. Installers are unsigned."
