@@ -10,7 +10,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 dist = root / "dist"
 dist.mkdir(exist_ok=True)
-version = "1.2.3"
+version = "1.2.4"
 
 def run(*args):
     subprocess.run(args, check=True)
@@ -51,7 +51,7 @@ def package(binary, stage):
             shutil.copy2(source, dest)
             run("pkgbuild", "--root", stage / "payload", "--identifier", "dev.emerald.server", "--version", version, stage / "Emerald Server.pkg")
             shutil.rmtree(stage / "payload")
-        run("hdiutil", "create", "-ov", "-volname", title, "-srcfolder", stage, dist / f"{binary}.dmg")
+        run("hdiutil", "create", "-ov", "-volname", title, "-srcfolder", stage, dist / f"{binary}-{platform.machine().replace('aarch64','arm64')}.dmg")
     elif system == "Windows":
         upgrade = uuid.uuid5(uuid.NAMESPACE_DNS, binary+".dev.emerald")
         shortcut = ('<Shortcut Id="Launch" Directory="ProgramMenuFolder" Name="Emerald" Advertise="yes"/>' if client else '')
