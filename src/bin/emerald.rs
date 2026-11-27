@@ -174,7 +174,7 @@ impl Tree {
                 .push((full.to_owned(), rest.trim_end_matches(".md").to_owned())),
         }
     }
-    fn show(&self, ui: &mut egui::Ui, cur: &str, open: &mut Option<String>, force: bool, desc: bool, collapse: bool) {
+    fn show(&self, ui: &mut egui::Ui, cur: &str, open: &mut Option<String>, del: &mut Option<String>, force: bool, desc: bool, collapse: bool) {
         let mut dirs: Vec<_> = self.dirs.iter().collect();
         let mut files: Vec<_> = self.files.iter().collect();
         if desc {
@@ -186,12 +186,27 @@ impl Tree {
             egui::CollapsingHeader::new(d)
                 .default_open(true)
                 .open(state)
-                .show(ui, |ui| t.show(ui, cur, open, force, desc, collapse));
+                .show(ui, |ui| t.show(ui, cur, open, del, force, desc, collapse));
         }
         for (full, name) in files {
-            if ui.selectable_label(full == cur, name).clicked() {
+            let r = ui.selectable_label(full == cur, name);
+            if r.clicked() {
                 *open = Some(full.clone())
             }
+            r.context_menu(|ui| {
+                if ui.button("Open").clicked() {
+                    *open = Some(full.clone());
+                    ui.close_menu();
+                }
+                if ui.button("Copy link").clicked() {
+                    ui.ctx().copy_text(format!("[[{name}]]"));
+                    ui.close_menu();
+                }
+                if ui.button("Delete").clicked() {
+                    *del = Some(full.clone());
+                    ui.close_menu();
+                }
+            });
         }
     }
 }
@@ -602,6 +617,7 @@ impl eframe::App for Notebook {
                 .collect()
         };
         let mut open = None;
+        let mut del: Option<String> = None;
         let mut result = Ok(());
         let (k_new, k_find, k_graph, k_close) = ctx.input_mut(|i| {
             (
@@ -771,7 +787,7 @@ impl eframe::App for Notebook {
                         }
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             if q.is_empty() {
-                                tree.show(ui, &self.doc.name, &mut open, false, self.sort_desc, collapse_now);
+                                tree.show(ui, &self.doc.name, &mut open, &mut del, false, self.sort_desc, collapse_now);
                                 return;
                             }
                             for (n, t) in &self.notes {
@@ -1129,6 +1145,12 @@ impl eframe::App for Notebook {
                         });
                 });
             });
+        if let Some(n) = del.take() {
+            match self.open(n) {
+                Ok(()) => self.confirm_delete = true,
+                Err(e) => result = Err(e),
+            }
+        }
         if let Some(n) = open.take() {
             result = self.open(n)
         }
