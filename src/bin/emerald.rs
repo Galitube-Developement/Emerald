@@ -10,10 +10,15 @@ use std::{collections::BTreeMap, fs, path::PathBuf, sync::mpsc, time::{Duration,
 struct Args {
     #[arg(long)]
     vault: Option<PathBuf>,
+    /// Open the log pane at start
+    #[arg(long)]
+    verbose: bool,
 }
 
 fn main() -> eframe::Result<()> {
-    let path = Args::parse().vault.unwrap_or_else(|| {
+    let args = Args::parse();
+    let verbose = args.verbose;
+    let path = args.vault.unwrap_or_else(|| {
         dirs::document_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_default()
@@ -28,7 +33,14 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| {
             theme(&cc.egui_ctx);
-            Ok(Box::new(Notebook::new(path)?))
+            let mut app = Notebook::new(path)?;
+            app.show_log = verbose;
+            let flag = app.vault.root.join(".emerald-tour");
+            if !flag.exists() {
+                app.tour = Some(0);
+                let _ = fs::write(flag, "");
+            }
+            Ok(Box::new(app))
         }),
     )
 }
@@ -208,6 +220,10 @@ struct Notebook {
     palette: bool,
     pal_query: String,
     pick: Option<(usize, usize, String)>,
+    log: Vec<String>,
+    show_log: bool,
+    vault_win: Option<String>,
+    tour: Option<usize>,
     test_rx: Option<mpsc::Receiver<Result<String>>>,
     test_msg: Option<(bool, String)>,
     gpos: BTreeMap<String, Vec2>,
@@ -261,6 +277,10 @@ impl Notebook {
             palette: false,
             pal_query: String::new(),
             pick: None,
+            log: Vec::new(),
+            show_log: false,
+            vault_win: None,
+            tour: None,
             test_rx: None,
             test_msg: None,
             gpos: BTreeMap::new(),
@@ -387,6 +407,13 @@ impl Notebook {
         self.status_err = false;
         Ok(())
     }
+    fn log_line(&mut self, m: String) {
+        let t = chrono::Local::now().format("%H:%M:%S");
+        self.log.push(format!("{t}  {m}"));
+        if self.log.len() > 500 {
+            self.log.remove(0);
+        }
+    }
     fn sync(&mut self, ctx: &egui::Context) -> Result<()> {
         self.save()?;
         let vault = self.vault.clone();
@@ -416,7 +443,8 @@ impl Notebook {
         } else {
             self.doc = Document::default()
         }
-        let s = result?;
+        let s = result.inspect_err(|e| self.log_line(format!("sync error: {e:#}")))?;
+        self.log_line(format!("sync: {s}"));
         self.status = s;
         self.status_err = false;
         Ok(())
@@ -1113,6 +1141,9 @@ impl eframe::App for Notebook {
                 ("Toggle sidebar".into(), "", "side"),
                 ("Sync now".into(), "", "sync"),
                 ("Sync settings".into(), "", "settings"),
+                ("Show log".into(), "", "log"),
+                ("Open another vault…".into(), "", "vault"),
+                ("Show tour".into(), "", "tour"),
             ];
             if !self.doc.name.is_empty() {
                 cmds.push(("Rename current note".into(), "", "rename"));
@@ -1176,6 +1207,9 @@ impl eframe::App for Notebook {
                     "side" => self.sidebar = !self.sidebar,
                     "sync" => result = self.sync(ctx),
                     "settings" => self.settings = true,
+                    "log" => self.show_log = true,
+                    "vault" => self.vault_win = Some(self.vault.root.display().to_string()),
+                    "tour" => self.tour = Some(0),
                     "rename" => self.focus_title = true,
                     "delete" => self.confirm_delete = true,
                     "preview" => {
@@ -1253,8 +1287,75 @@ impl eframe::App for Notebook {
             }
         }
         if let Err(e) = result {
+            self.log_line(format!("error: {e:#}"));
             self.status = e.to_string();
             self.status_err = true;
+        }
+        if let Some(mut path) = self.vault_win.take() {
+            let mut keep = true;
+            let mut go = false;
+            egui::Window::new("Open another vault").collapsible(false).show(ctx, |ui| {
+                ui.label("Folder to use as vault (created if missing)");
+                ui.add(egui::TextEdit::singleline(&mut path).desired_width(360.));
+                ui.horizontal(|ui| {
+                    go = ui.button("Open").clicked();
+                    if ui.button("Cancel").clicked() {
+                        keep = false
+                    }
+                });
+            });
+            if go {
+                let p = PathBuf::from(path.trim());
+                match fs::create_dir_all(&p).map_err(Into::into).and_then(|_| Notebook::new(p)) {
+                    Ok(mut nb) => {
+                        nb.log = std::mem::take(&mut self.log);
+                        nb.show_log = self.show_log;
+                        nb.status = "Vault opened".into();
+                        *self = nb;
+                    }
+                    Err(e) => {
+                        self.status = e.to_string();
+                        self.status_err = true;
+                    }
+                }
+            } else if keep {
+                self.vault_win = Some(path)
+            }
+        }
+        if let Some(step) = self.tour {
+            const STEPS: [&str; 4] = [
+                "Ribbon (left edge): files, search, graph and daily note live here.",
+                "Ctrl+N makes a note. Click its title to rename it; it autosaves.",
+                "Type [[ to link to another note. Ctrl+P opens the command palette.",
+                "The bottom bar shows vault, note count and status. Set up sync with the link in the editor.",
+            ];
+            let mut next = Some(step);
+            egui::Window::new(format!("Tour {}/4", step + 1)).collapsible(false).anchor(egui::Align2::LEFT_BOTTOM, [60., -40.]).show(ctx, |ui| {
+                ui.label(STEPS[step]);
+                ui.horizontal(|ui| {
+                    if ui.button(if step == 3 { "Done" } else { "Next" }).clicked() {
+                        next = if step == 3 { None } else { Some(step + 1) }
+                    }
+                    if ui.button("Skip").clicked() {
+                        next = None
+                    }
+                });
+            });
+            self.tour = next;
+        }
+        if self.show_log {
+            let mut win = true;
+            egui::Window::new("Log").open(&mut win).default_size([480., 260.]).show(ctx, |ui| {
+                egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+                    if self.log.is_empty() {
+                        ui.label(egui::RichText::new("Nothing logged yet.").color(MUTED));
+                    }
+                    for l in &self.log {
+                        ui.label(egui::RichText::new(l.as_str()).size(12.));
+                    }
+                });
+            });
+            self.show_log = win;
         }
     }
 }
