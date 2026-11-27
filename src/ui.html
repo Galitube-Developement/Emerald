@@ -1,44 +1,235 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Emerald Vault</title>
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Emerald</title>
 <style>
-*{box-sizing:border-box}body{margin:0;font:16px/1.55 system-ui;color:#243d34;background:#fafaf6}main{display:grid;grid-template-columns:minmax(190px,24%) 1fr;min-height:100vh}aside{background:#e9eee7;padding:20px}header,nav{display:flex;gap:8px;align-items:center;flex-wrap:wrap}section{padding:24px clamp(18px,4vw,68px)}h1{font:2em Georgia;margin:8px 0 24px}button,input{font:inherit;border:1px solid #abbcaf;border-radius:5px;background:white;padding:5px 10px}button{cursor:pointer}aside input{width:100%;margin:16px 0}#files button{display:block;width:100%;text-align:left;overflow-wrap:anywhere;border:0;background:transparent}button:hover,#files button[aria-current=true]{background:#cdddcf}textarea,article{width:100%;min-height:55vh;margin:18px 0;padding:20px;border:1px solid #ced8cc;border-radius:6px;background:white;font:1.1em/1.65 Georgia}textarea{resize:vertical}pre{overflow:auto}img{max-width:100%}output{display:block;color:#365b48}h2{overflow-wrap:anywhere}@media(max-width:650px){main{display:block}#files{max-height:130px;overflow:auto}}
-</style><main><aside><h1>Emerald</h1><nav><button id="create">New note</button><button id="sync">Sync</button><button id="setup">Sync settings</button><button id="today">Daily note</button><button id="graph">Graph</button></nav><input id="filter" placeholder="Search notes or #tags" aria-label="Search vault"><div id="files"></div></aside><section><h2 id="title">Open a note</h2><header><button id="save">Save</button><button id="preview">Preview</button><button id="del">Delete</button></header><textarea id="editor" aria-label="Markdown" disabled></textarea><article id="render" hidden></article><output id="status" role="status"></output><div id="links"></div><div id="backlinks"></div><dialog id="settings"><form id="connection"><h2>Sync settings</h2><label>Server URL <input id="serverUrl" required type="url" placeholder="https://notes.example.org/"></label><p><label>Server token <input id="secret" required type="password" autocomplete="off"></label></p><button type="submit">Save connection</button> <button type="button" id="cancel">Cancel</button><output id="settingsError"></output></form></dialog><dialog id="map"><button id="closeMap">Close graph</button><canvas id="net" width="700" height="480"></canvas><div id="legend"></div></dialog></section></main>
+:root{--bg:#1e1e1e;--bg2:#262626;--bg3:#161616;--bd:#363636;--tx:#dadada;--mu:#999;--fa:#666;--ac:#2fb583;--ach:#46d19c;--hv:#2f2f2f;--sel:#3a3a3a;--sb:#27a77a55}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{font:14px/1.5 -apple-system,"Segoe UI",Inter,Roboto,sans-serif;color:var(--tx);background:var(--bg3);overflow:hidden;user-select:none}
+svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+#app{display:grid;grid-template-columns:44px auto 1fr auto;height:100vh}
+#ribbon{background:var(--bg2);border-right:1px solid var(--bd);display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:4px}
+#ribbon .sp{flex:1}
+.ib{width:30px;height:28px;display:grid;place-items:center;border-radius:5px;color:var(--mu)}
+.ib:hover{background:var(--hv);color:var(--tx)}.ib.on{color:var(--tx);background:var(--sel)}
+#side{width:274px;background:var(--bg2);border-right:1px solid var(--bd);display:flex;flex-direction:column;min-width:0}
+#side.hide{display:none}
+.bar{display:flex;gap:2px;justify-content:center;padding:8px 6px 6px}
+#tree{flex:1;overflow:auto;padding:4px 8px 12px}
+.row{display:flex;align-items:center;gap:4px;padding:2px 6px;border-radius:5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tx)}
+.row:hover{background:var(--hv)}.row.act{background:var(--sel);color:#fff}.row svg{width:14px;height:14px;color:var(--mu);transition:transform .1s}
+.row.closed svg{transform:rotate(-90deg)}.row span{overflow:hidden;text-overflow:ellipsis}.kids{margin-left:12px;border-left:1px solid var(--bd);padding-left:2px}
+#vault{border-top:1px solid var(--bd);padding:8px 14px;display:flex;align-items:center;font-weight:600;gap:8px}#vault .sp{flex:1}
+#search{display:none;flex-direction:column;flex:1;min-height:0}#search input{margin:0 10px 8px}
+input.f{width:calc(100% - 20px);background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:5px;padding:5px 9px;font:inherit;user-select:text}
+input.f:focus{outline:0;border-color:var(--ac)}
+#results{overflow:auto;padding:0 8px}.hit{padding:4px 8px;border-radius:5px;cursor:pointer}.hit:hover{background:var(--hv)}.hit small{display:block;color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+mark{background:#d8a31a55;color:inherit;border-radius:2px}
+#main{display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+#tabs{display:flex;align-items:flex-end;background:var(--bg3);padding:6px 8px 0;gap:2px;height:38px}
+.tab{display:flex;align-items:center;gap:8px;padding:0 8px 0 12px;height:32px;min-width:90px;max-width:200px;border-radius:7px 7px 0 0;color:var(--mu);cursor:pointer}
+.tab:hover{background:var(--bg2)}.tab.act{background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-bottom:0;height:33px}
+.tab span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tab i{font-style:normal;color:var(--ac)}
+.tab .x{width:18px;height:18px;border-radius:4px;display:grid;place-items:center}.tab .x:hover{background:var(--sel)}.tab .x svg{width:13px;height:13px}
+#nav{display:flex;align-items:center;gap:4px;padding:6px 12px;color:var(--mu);height:36px}
+#nav .t{flex:1;text-align:center;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#view{flex:1;min-height:0;position:relative;overflow:auto}
+#doc{max-width:760px;margin:0 auto;padding:30px 40px 40vh}
+#ttl{width:100%;background:none;border:0;color:var(--tx);font:700 2em/1.3 inherit;padding:0;margin:0 0 .4em;outline:0;user-select:text}
+#ed{width:100%;min-height:60vh;background:none;border:0;outline:0;color:var(--tx);font:16px/1.7 -apple-system,"Segoe UI",Inter,sans-serif;resize:none;overflow:hidden;padding:0;user-select:text}
+#ren{font-size:16px;line-height:1.7;user-select:text}#ren h1,#ren h2,#ren h3{line-height:1.3}#ren a{color:var(--ach)}#ren code{background:var(--bg2);padding:1px 5px;border-radius:4px}#ren pre{background:var(--bg2);padding:12px;border-radius:6px;overflow:auto}#ren blockquote{border-left:3px solid var(--ac);margin-left:0;padding-left:14px;color:var(--mu)}#ren img{max-width:100%}#ren table{border-collapse:collapse}#ren td,#ren th{border:1px solid var(--bd);padding:4px 10px}
+.wl{color:var(--ach);cursor:pointer;text-decoration:underline}
+#empty{height:100%;display:grid;place-items:center}#empty div{display:flex;flex-direction:column;gap:10px;width:240px}
+#empty button{border:1px solid var(--bd);border-radius:20px;padding:8px 14px;display:flex;align-items:center;gap:10px;background:var(--bg)}#empty button:hover{background:var(--hv)}#empty kbd{margin-left:auto}
+kbd{background:var(--bg2);border-radius:4px;padding:0 6px;font:12px inherit;color:var(--mu)}
+#gc{width:100%;height:100%;display:block}
+#rs{width:260px;background:var(--bg2);border-left:1px solid var(--bd);overflow:auto;padding:10px}#rs.hide{display:none}
+#rs h4{margin:14px 0 4px;font-size:12px;color:var(--mu);text-transform:uppercase;letter-spacing:.04em}
+#status{position:fixed;right:0;bottom:0;background:var(--bg2);border:1px solid var(--bd);border-bottom:0;border-right:0;border-radius:6px 0 0 0;padding:2px 12px;color:var(--mu);font-size:12px;display:flex;gap:12px;z-index:5}
+#msg{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);background:var(--bg2);border:1px solid var(--bd);padding:8px 16px;border-radius:8px;display:none;z-index:30}
+#ov{position:fixed;inset:0;background:#0006;display:none;z-index:20;align-items:flex-start;justify-content:center;padding-top:12vh}
+#pal{width:560px;max-width:92vw;background:var(--bg2);border:1px solid var(--bd);border-radius:10px;box-shadow:0 10px 40px #000a;padding:10px}
+#pal input{width:100%;margin-bottom:6px}#pl{max-height:50vh;overflow:auto}#pl .row.act{background:var(--ac);color:#fff}
+#ctx{position:fixed;background:var(--bg2);border:1px solid var(--bd);border-radius:7px;padding:4px;display:none;z-index:25;box-shadow:0 6px 20px #000a}
+dialog{background:var(--bg2);color:var(--tx);border:1px solid var(--bd);border-radius:10px;padding:20px;width:420px}dialog::backdrop{background:#0008}
+dialog label{display:block;margin:10px 0 4px}dialog .f{width:100%}dialog .btns{margin-top:14px;display:flex;gap:8px;justify-content:flex-end}
+.btn{background:var(--bg);border:1px solid var(--bd);border-radius:5px;padding:5px 12px}.btn.p{background:var(--ac);border-color:var(--ac);color:#fff}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#444;border-radius:5px;border:2px solid transparent;background-clip:content-box}
+@media(max-width:700px){#side{position:absolute;z-index:9;height:100%;left:44px}#rs{display:none}}
+</style>
+<div id="app">
+<div id="ribbon">
+ <button class="ib" id="rSide" title="Toggle sidebar"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+ <button class="ib on" id="rFiles" title="Files"><svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+ <button class="ib" id="rSearch" title="Search (Ctrl+Shift+F)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></button>
+ <button class="ib" id="rGraph" title="Open graph view"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l8 1M7 8l4 8M17 10l-4 6"/></svg></button>
+ <button class="ib" id="rToday" title="Open today's daily note"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></button>
+ <button class="ib" id="rPal" title="Command palette (Ctrl+P)"><svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></svg></button>
+ <div class="sp"></div>
+ <button class="ib" id="rSync" title="Sync"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16M3 12a9 9 0 0 1 15.5-6.2L21 8M3 21v-5h5M21 3v5h-5"/></svg></button>
+ <button class="ib" id="rSet" title="Sync settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg></button>
+</div>
+<div id="side">
+ <div id="filesP" style="display:flex;flex-direction:column;flex:1;min-height:0">
+  <div class="bar">
+   <button class="ib" id="bNew" title="New note"><svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+   <button class="ib" id="bFolder" title="New folder note"><svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 11v6M9 14h6"/></svg></button>
+   <button class="ib" id="bSort" title="Change sort order"><svg viewBox="0 0 24 24"><path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 4v16"/></svg></button>
+   <button class="ib" id="bCollapse" title="Collapse all"><svg viewBox="0 0 24 24"><path d="m7 20 5-5 5 5M7 4l5 5 5-5"/></svg></button>
+  </div>
+  <div id="tree"></div>
+ </div>
+ <div id="search"><div class="bar"><input class="f" id="q" placeholder="Search..." aria-label="Search vault"></div><div id="results"></div></div>
+ <div id="vault"><svg viewBox="0 0 24 24"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg>Emerald<span class="sp"></span></div>
+</div>
+<div id="main">
+ <div id="tabs"></div>
+ <div id="nav"><button class="ib" id="back" title="Back"><svg viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg></button><button class="ib" id="fwd" title="Forward"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button><div class="t" id="navt"></div><button class="ib" id="mode" title="Toggle reading view (Ctrl+E)"><svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button><button class="ib" id="rtog" title="Toggle backlinks panel"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button></div>
+ <div id="view"></div>
+</div>
+<div id="rs"></div>
+</div>
+<div id="status"></div><div id="msg"></div><div id="ctx"></div>
+<div id="ov"><div id="pal"><input class="f" id="pi" autocomplete="off"><div id="pl"></div></div></div>
+<dialog id="settings"><form id="connection"><h3 style="margin-top:0">Sync settings</h3><label>Server URL</label><input class="f" id="serverUrl" required type="url" placeholder="https://notes.example.org/"><label>Server token</label><input class="f" id="secret" required type="password" autocomplete="off"><div class="btns"><span id="settingsError" style="flex:1;color:#e66"></span><button type="button" class="btn" id="cancel">Cancel</button><button type="submit" class="btn p">Save connection</button></div></form></dialog>
 <script>
-const el=id=>document.getElementById(id), editor=el('editor'), statusBox=el('status');
+const $=id=>document.getElementById(id);
 const token=location.hash.slice(1)||sessionStorage.token;sessionStorage.token=token;history.replaceState(null,'','/');
-let notes={},files={},name='',base='',dirty=false;
-async function api(path,method='GET',body){const r=await fetch(path,{method,headers:{Authorization:'Bearer '+token},body});if(!r.ok)throw Error(await r.text()||r.statusText);return r}
-function uri(n,b){const q=new URLSearchParams({name:n});if(b!==undefined)q.set('base',b);return '/file?'+q}
-function button(label,action){const b=document.createElement('button');b.textContent=label;b.onclick=()=>task(action);return b}
-let busy=false;
-async function task(fn){if(busy)return;busy=true;editor.readOnly=true;try{await fn()}catch(e){statusBox.textContent=e.message}finally{busy=false;editor.readOnly=false}}
-function list(){el('files').replaceChildren();for(const n of Object.keys(files).filter(n=>n.endsWith('.md')&&(n+' '+(notes[n]?.text||'')).toLowerCase().includes(el('filter').value.toLowerCase())).sort()){const b=button(n,()=>openNote(n));b.setAttribute('aria-current',n===name);el('files').append(b)}}
+let notes={},files={},tabs=[],cur=-1,closed=new Set(JSON.parse(localStorage.closed||'[]')),sortDesc=false,hist=[],fwd=[],panel='files';
+const ic=(d,s)=>`<svg viewBox="0 0 24 24"${s?` style="${s}"`:''}>${d}</svg>`,chev='<path d="m6 9 6 6 6-6"/>',cross='<path d="M18 6 6 18M6 6l12 12"/>';
+const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function api(p,m='GET',b){const r=await fetch(p,{method:m,headers:{Authorization:'Bearer '+token},body:b});if(!r.ok)throw Error(await r.text()||r.statusText);return r}
+const uri=(n,b)=>{const q=new URLSearchParams({name:n});if(b!==undefined)q.set('base',b);return '/file?'+q};
+let mt;function msg(t){const m=$('msg');m.textContent=t;m.style.display='block';clearTimeout(mt);mt=setTimeout(()=>m.style.display='none',3000)}
+async function run(f){try{await f()}catch(e){msg(e.message)}}
+const md=n=>n.endsWith('.md')?n:n+'.md',base=n=>n.replace(/\.md$/,'').split('/').pop();
+const sha=async t=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t))),b=>b.toString(16).padStart(2,'0')).join('');
+function links(t){return Array.from(t.matchAll(/\[\[([^\]\n|#]+)(?:[#|][^\]\n]*)?\]\]/g),m=>m[1].trim())}
+function resolve(l){const n=md(l);if(n in files)return n;const b=n.toLowerCase();return Object.keys(files).find(f=>f.toLowerCase()===b||f.toLowerCase().endsWith('/'+b))||n}
 async function refresh(){files=await(await api('/files')).json();
  for(const n of Object.keys(notes))if(!(n in files))delete notes[n];
- for(const [n,hash] of Object.entries(files))if(n.endsWith('.md')&&notes[n]?.hash!==hash)notes[n]={hash,text:await(await api(uri(n))).text()};
- list()}
-function editing(){editor.hidden=false;el('render').hidden=true;el('preview').textContent='Preview'}
-async function openNote(n){if(dirty&&!confirm('Discard unsaved edits?'))return;await refresh();const data=n in files?await(await api(uri(n))).text():'';name=n;base=files[n]||'';editor.disabled=false;editor.value=data;dirty=!(n in files);el('title').textContent=n;statusBox.textContent=dirty?'New note':'';editing();list();showLinks()}
-function targets(text){return Array.from(text.matchAll(/\[\[([^\]\n]+)\]\]/g),m=>m[1].endsWith('.md')?m[1]:m[1]+'.md')}
-function showLinks(){const incoming=Object.keys(notes).filter(n=>targets(notes[n].text).includes(name));el('backlinks').replaceChildren();if(incoming.length){el('backlinks').append('Linked from ');for(const n of incoming)el('backlinks').append(button(n,()=>openNote(n)))}const links=el('links');links.replaceChildren();for(const match of new Set(Array.from(editor.value.matchAll(/\[\[([^\]\n]+)\]\]/g),m=>m[1]))){links.append(button(match,()=>openNote(match.endsWith('.md')?match:match+'.md')))}}
-async function save(){if(!name)return;await api(uri(name,base),'PUT',editor.value);const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(editor.value));base=Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,'0')).join('');dirty=false;statusBox.textContent='Saved';await refresh()}
-el('create').onclick=()=>task(async()=>{const n=prompt('Note path, for example Projects/Ideas');if(n)await openNote(n.endsWith('.md')?n:n+'.md')});
-el('save').onclick=()=>task(save);editor.oninput=()=>{dirty=true;statusBox.textContent='Unsaved changes';showLinks()};
-el('filter').oninput=list;
-el('del').onclick=()=>task(async()=>{if(name&&confirm('Delete '+name+'?')){await api(uri(name,base),'DELETE');name='';dirty=false;editor.value='';editor.disabled=true;editing();el('title').textContent='Open a note';showLinks();statusBox.textContent='Deleted';await refresh()}});
-el('sync').onclick=()=>task(async()=>{if(dirty)await save();const msg=await(await api('/sync','POST')).text();await refresh();if(name in files)await openNote(name);else{editor.disabled=true;editor.value='';name='';el('title').textContent='Open a note';editing();showLinks()}statusBox.textContent=msg});
-el('preview').onclick=()=>task(async()=>{if(!name)return;if(editor.hidden){editing();return}el('render').innerHTML=await(await api('/preview','POST',editor.value)).text();editor.hidden=true;el('render').hidden=false;el('preview').textContent='Edit'});
-onbeforeunload=e=>{if(dirty){e.preventDefault();e.returnValue=''}};
-onkeydown=e=>{if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();task(save)}};
-el('setup').onclick=()=>el('settings').showModal();el('cancel').onclick=()=>{el('secret').value='';el('settings').close()};
-el('connection').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/connection',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({server:el('serverUrl').value,token:el('secret').value})});if(!r.ok)throw Error(await r.text());el('secret').value='';el('settings').close();statusBox.textContent='Connection saved. Choose Sync to synchronize.'}catch(e){el('settingsError').textContent=e.message}};
-el('today').onclick=()=>task(()=>{const d=new Date();return openNote('Daily/'+d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'.md')});
-el('graph').onclick=()=>task(async()=>{
- await refresh();const names=Object.keys(notes),canvas=el('net'),c=canvas.getContext('2d');
- c.clearRect(0,0,canvas.width,canvas.height);const coords=new Map(names.map((n,i)=>[n,[350+260*Math.cos(i*2*Math.PI/names.length),240+185*Math.sin(i*2*Math.PI/names.length)]]));
- c.strokeStyle='#9caea1';for(const n of names)for(const t of targets(notes[n].text)){if(coords.has(t)){c.beginPath();c.moveTo(...coords.get(n));c.lineTo(...coords.get(t));c.stroke()}}
- for(const [n,[x,y]] of coords){c.fillStyle='#266c52';c.beginPath();c.arc(x,y,5,0,2*Math.PI);c.fill();c.fillText(n,x+7,y)}
- el('legend').replaceChildren();for(const n of names)el('legend').append(button(n,async()=>{el('map').close();await openNote(n)}));el('map').showModal()
-});
-el('closeMap').onclick=()=>el('map').close();
-task(refresh);
+ for(const [n,h] of Object.entries(files))if(n.endsWith('.md')&&notes[n]?.hash!==h)notes[n]={hash:h,text:await(await api(uri(n))).text()};
+ drawTree();if(panel==='search')doSearch();drawRight()}
+/* ---------- file tree ---------- */
+function buildTree(){const root={d:{},f:[]};for(const n of Object.keys(files).filter(n=>n.endsWith('.md'))){const p=n.split('/');let t=root;for(const s of p.slice(0,-1))t=t.d[s]??={d:{},f:[]};t.f.push(n)}return root}
+function drawTree(){const box=$('tree');box.replaceChildren();const act=tabs[cur]?.name;
+ const cmp=(a,b)=>sortDesc?b.localeCompare(a):a.localeCompare(b,undefined,{numeric:true,sensitivity:'base'});
+ (function walk(t,host,path){for(const d of Object.keys(t.d).sort(cmp)){const p=path+d+'/',r=document.createElement('div');r.className='row'+(closed.has(p)?' closed':'');r.innerHTML=ic(chev)+`<span>${esc(d)}</span>`;
+   const k=document.createElement('div');k.className='kids';k.hidden=closed.has(p);
+   r.onclick=()=>{closed.has(p)?closed.delete(p):closed.add(p);localStorage.closed=JSON.stringify([...closed]);r.classList.toggle('closed');k.hidden=!k.hidden};
+   r.oncontextmenu=e=>ctx(e,[['New note in folder',()=>newNote(p)]]);
+   host.append(r,k);walk(t.d[d],k,p)}
+  for(const n of t.f.sort((a,b)=>cmp(base(a),base(b)))){const r=document.createElement('div');r.className='row'+(n===act?' act':'');r.style.paddingLeft='22px';r.innerHTML=`<span>${esc(base(n))}</span>`;r.title=n;
+   r.onclick=()=>openNote(n);r.onauxclick=e=>{if(e.button===1)openNote(n,true)};
+   r.oncontextmenu=e=>ctx(e,[['Open in new tab',()=>openNote(n,true)],['Rename…',()=>rename(n)],['Delete',()=>del(n)]]);host.append(r)}
+ })(buildTree(),box,'')}
+function ctx(e,items){e.preventDefault();const c=$('ctx');c.replaceChildren();for(const [l,f] of items){const r=document.createElement('div');r.className='row';r.textContent=l;r.onclick=()=>{c.style.display='none';run(async()=>f())};c.append(r)}
+ c.style.display='block';c.style.left=Math.min(e.clientX,innerWidth-190)+'px';c.style.top=Math.min(e.clientY,innerHeight-c.offsetHeight-8)+'px'}
+addEventListener('click',()=>$('ctx').style.display='none');
+/* ---------- tabs ---------- */
+function drawTabs(){const b=$('tabs');b.replaceChildren();tabs.forEach((t,i)=>{const d=document.createElement('div');d.className='tab'+(i===cur?' act':'');
+  d.innerHTML=`<span>${esc(t.special==='graph'?'Graph view':t.special?'New tab':base(t.name))}${t.dirty?' <i>●</i>':''}</span><div class="x">${ic(cross)}</div>`;
+  d.onclick=()=>activate(i);d.onauxclick=e=>{if(e.button===1)closeTab(i)};d.querySelector('.x').onclick=e=>{e.stopPropagation();closeTab(i)};b.append(d)});
+ const p=document.createElement('button');p.className='ib';p.innerHTML=ic('<path d="M12 5v14M5 12h14"/>');p.title='New tab';p.onclick=()=>{tabs.push({special:'new'});activate(tabs.length-1)};b.append(p)}
+function activate(i,nohist){if(!nohist&&cur>=0&&tabs[cur]?.name&&tabs[i]?.name!==tabs[cur].name){hist.push(tabs[cur].name);fwd=[]}cur=i;render()}
+async function closeTab(i){const t=tabs[i];if(t.dirty&&!confirm('Discard unsaved changes to '+t.name+'?'))return;tabs.splice(i,1);cur=Math.min(cur>i?cur-1:cur,tabs.length-1);render()}
+async function openNote(n,newTab){n=md(n);await run(async()=>{const ex=tabs.findIndex(t=>t.name===n);if(ex>=0)return activate(ex);
+  const isNew=!(n in files),text=isNew?'':(notes[n]?.text??await(await api(uri(n))).text());
+  const t={name:n,text,base:files[n]||'',dirty:false,mode:'edit',isNew};
+  if(newTab||cur<0||tabs[cur].dirty||(tabs[cur].special&&tabs[cur].special==='graph')){tabs.push(t);activate(tabs.length-1)}else{if(tabs[cur].name)hist.push(tabs[cur].name);fwd=[];tabs[cur]=t;cur=cur;render()}})}
+function render(){drawTabs();drawTree();const v=$('view'),t=tabs[cur];$('navt').textContent=t?.name?t.name.replace(/\.md$/,'').replace(/\//g,' / '):t?.special==='graph'?'Graph view':'New tab';
+ $('mode').style.visibility=t?.name?'visible':'hidden';stopGraph();
+ if(!t){v.innerHTML=emptyHtml();wireEmpty(v);drawRight();status();return}
+ if(t.special==='new'){v.innerHTML=emptyHtml();wireEmpty(v)}
+ else if(t.special==='graph'){graph(v)}
+ else{v.innerHTML='<div id="doc"><input id="ttl" aria-label="Title" spellcheck="false"><textarea id="ed" aria-label="Markdown" spellcheck="true"></textarea><div id="ren" hidden></div></div>';
+  const ttl=$('ttl'),ed=$('ed');ttl.value=base(t.name);ed.value=t.text;fit();
+  ed.oninput=()=>{t.text=ed.value;if(!t.dirty){t.dirty=true;drawTabs()}fit();drawRight();status();clearTimeout(t.timer);t.timer=setTimeout(()=>run(()=>save(t)),1500)};
+  ed.onkeydown=editKeys;ttl.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();ttl.blur();ed.focus()}};ttl.onblur=()=>{if(ttl.value&&ttl.value!==base(t.name))run(()=>rename(t.name,ttl.value))};
+  if(t.mode==='read')showRead(t);else if(t.isNew||!t.text)ed.focus()}
+ drawRight();status()}
+function fit(){const e=$('ed');if(!e)return;e.style.height='auto';e.style.height=Math.max(e.scrollHeight,innerHeight*.5)+'px'}
+function editKeys(e){const ed=e.target;if(e.key==='Tab'){e.preventDefault();document.execCommand('insertText',false,'  ')}
+ else if(e.key==='Enter'&&!e.shiftKey){const s=ed.selectionStart,line=ed.value.slice(ed.value.lastIndexOf('\n',s-1)+1,s),m=line.match(/^(\s*)([-*+]|\d+\.)(\s+)(\[[ x]\]\s+)?/);
+  if(m){e.preventDefault();if(line.trim()===m[0].trim()){ed.setSelectionRange(s-line.length,s);document.execCommand('insertText',false,'\n')}else{const mark=/\d/.test(m[2])?(parseInt(m[2])+1)+'.':m[2];document.execCommand('insertText',false,'\n'+m[1]+mark+m[3]+(m[4]?'[ ] ':''))}}}
+ else if(e.ctrlKey&&e.key==='b'){e.preventDefault();wrap(ed,'**')}else if(e.ctrlKey&&e.key==='i'){e.preventDefault();wrap(ed,'*')}
+ else if(e.key==='['&&ed.selectionStart!==ed.selectionEnd){e.preventDefault();wrap(ed,'[[',']]')}}
+function wrap(ed,a,b=a){const s=ed.selectionStart,e=ed.selectionEnd;document.execCommand('insertText',false,a+ed.value.slice(s,e)+b);ed.setSelectionRange(s+a.length,e+a.length)}
+async function showRead(t){const r=$('ren');let h=await(await api('/preview','POST',t.text)).text();
+ h=h.replace(/\[\[([^\]\n|#]+)(?:[#|]([^\]\n]*))?\]\]/g,(m,l,a)=>`<span class="wl" data-l="${l}">${a||l}</span>`);
+ r.innerHTML=h;r.hidden=false;$('ed').hidden=true;r.querySelectorAll('.wl').forEach(s=>s.onclick=()=>openNote(resolve(s.dataset.l)));t.mode='read'}
+function toggleMode(){const t=tabs[cur];if(!t?.name)return;if(t.mode==='read'){t.mode='edit';render();$('ed').focus()}else run(()=>showRead(t))}
+function emptyHtml(){return `<div id="empty"><div><button data-a="new">${ic('<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>')}New note<kbd>Ctrl + N</kbd></button><button data-a="graph">${ic('<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="12" cy="18" r="2.5"/>')}Open graph</button><button data-a="today">${ic('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/>')}Daily note</button><button data-a="go">${ic('<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>')}Go to file<kbd>Ctrl + O</kbd></button></div></div>`}
+function wireEmpty(v){v.querySelectorAll('button').forEach(b=>b.onclick=()=>({new:()=>newNote(),graph:openGraph,today:today,go:()=>palette('files')})[b.dataset.a]())}
+/* ---------- note ops ---------- */
+async function save(t){if(!t.name||!t.dirty)return;clearTimeout(t.timer);const text=t.text;await api(uri(t.name,t.base),'PUT',text);t.base=await sha(text);t.isNew=false;if(t.text===text)t.dirty=false;files[t.name]=t.base;notes[t.name]={hash:t.base,text};drawTabs();drawTree();drawRight()}
+async function newNote(folder=''){let i=0,n;do n=folder+'Untitled'+(i?' '+i:'')+'.md',i++;while(n in files||tabs.some(t=>t.name===n));
+ await openNote(n,true);const t=tabs[cur];t.dirty=true;t.text='';await save(t).catch(e=>msg(e.message));await refresh();render();const ttl=$('ttl');if(ttl){ttl.focus();ttl.select()}}
+async function rename(old,nn){nn=nn||prompt('New name (path allowed)',old.replace(/\.md$/,''));if(!nn)return;const dir=old.includes('/')&&!nn.includes('/')?old.slice(0,old.lastIndexOf('/')+1):'';const n=md(dir+nn);if(n===old)return;if(n in files)throw Error('A note named that already exists');
+ const t=tabs.find(t=>t.name===old);if(t)await save(t);const text=t?.text??await(await api(uri(old))).text();await api(uri(n,''),'PUT',text);await api(uri(old,files[old]),'DELETE');
+ for(const x of tabs)if(x.name===old){x.name=n;x.base=await sha(text)}await refresh();render()}
+async function del(n){if(!confirm('Delete '+base(n)+'?'))return;const i=tabs.findIndex(t=>t.name===n);if(i>=0){tabs[i].dirty=false;clearTimeout(tabs[i].timer);tabs.splice(i,1);cur=Math.min(cur,tabs.length-1)}
+ if(n in files)await api(uri(n,files[n]),'DELETE');await refresh();render();msg('Deleted '+base(n))}
+const today=()=>{const d=new Date(),p=x=>String(x).padStart(2,'0');return openNote('Daily/'+d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()))};
+async function sync(){for(const t of tabs)await save(t);const m=await(await api('/sync','POST')).text();await refresh();for(const t of tabs)if(t.name){if(t.name in files&&!t.dirty){t.text=notes[t.name].text;t.base=files[t.name]}else if(!(t.name in files)&&!t.dirty)t.gone=true}tabs=tabs.filter(t=>!t.gone);cur=Math.min(cur,tabs.length-1);render();msg(m||'Synced')}
+/* ---------- right panel ---------- */
+function drawRight(){const r=$('rs'),t=tabs[cur];if(!t?.name){r.innerHTML='<h4>Backlinks</h4><div style="color:var(--fa)">No note open</div>';return}
+ const back=Object.keys(notes).filter(n=>n!==t.name&&links(notes[n].text).some(l=>resolve(l)===t.name)),out=[...new Set(links(t.text))];
+ r.replaceChildren();const sec=(h,arr,f)=>{const e=document.createElement('h4');e.textContent=h+' ('+arr.length+')';r.append(e);if(!arr.length){const d=document.createElement('div');d.style.color='var(--fa)';d.textContent='None';r.append(d)}
+  for(const x of arr){const d=document.createElement('div');d.className='row';d.textContent=f(x);d.onclick=()=>openNote(x.n||resolve(x));if(x.n)d.onclick=()=>openNote(x.n);r.append(d)}};
+ sec('Backlinks',back.map(n=>({n,toString:()=>base(n)})),x=>base(x.n));sec('Outgoing links',out,l=>l+(resolve(l) in files?'':' (unresolved)'));
+ const tags=[...new Set((t.text.match(/(^|\s)#[\w\/-]+/g)||[]).map(s=>s.trim()))];if(tags.length){const e=document.createElement('h4');e.textContent='Tags';r.append(e);for(const g of tags){const d=document.createElement('div');d.className='row';d.textContent=g;d.onclick=()=>{setPanel('search');$('q').value=g;doSearch()};r.append(d)}}}
+function status(){const t=tabs[cur],s=$('status');if(!t?.name){s.style.display='none';return}s.style.display='flex';const w=(t.text.match(/\S+/g)||[]).length,b=Object.keys(notes).filter(n=>n!==t.name&&links(notes[n].text).some(l=>resolve(l)===t.name)).length;
+ s.textContent='';for(const x of [b+' backlink'+(b==1?'':'s'),w+' words',t.text.length+' characters'])s.append(Object.assign(document.createElement('span'),{textContent:x}))}
+/* ---------- search ---------- */
+function setPanel(p){panel=p;$('side').classList.remove('hide');$('filesP').style.display=p==='files'?'flex':'none';$('search').style.display=p==='search'?'flex':'none';$('rFiles').classList.toggle('on',p==='files');$('rSearch').classList.toggle('on',p==='search');if(p==='search')$('q').focus()}
+function doSearch(){const q=$('q').value.toLowerCase(),box=$('results');box.replaceChildren();if(!q)return;let c=0;
+ for(const n of Object.keys(notes).sort()){const tx=notes[n].text,i=tx.toLowerCase().indexOf(q),inName=n.toLowerCase().includes(q);if(i<0&&!inName)continue;if(c++>100)break;
+  const d=document.createElement('div');d.className='hit';const sn=i>=0?tx.slice(Math.max(0,i-30),i+80).replace(/\n/g,' '):'';
+  d.innerHTML=`<div>${esc(base(n))}</div><small>${esc(n)}</small>${sn?`<small>${esc(sn).replace(new RegExp(esc(q).replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'ig'),m=>'<mark>'+m+'</mark>')}</small>`:''}`;d.onclick=()=>openNote(n);box.append(d)}
+ if(!c)box.textContent='No matches found'}
+/* ---------- palette ---------- */
+const cmds=[['New note','Ctrl+N',()=>newNote()],['Quick switcher: open note','Ctrl+O',()=>palette('files')],['Open graph view','',openGraph],['Open today\'s daily note','',today],['Toggle reading view','Ctrl+E',toggleMode],['Toggle left sidebar','',()=>$('side').classList.toggle('hide')],['Toggle right sidebar','',()=>$('rs').classList.toggle('hide')],['Search in all files','Ctrl+Shift+F',()=>setPanel('search')],['Sync with server','',sync],['Sync settings','',()=>$('settings').showModal()],['Delete current note','',()=>tabs[cur]?.name&&del(tabs[cur].name)],['Rename current note','F2',()=>tabs[cur]?.name&&rename(tabs[cur].name)],['Close current tab','Ctrl+W',()=>cur>=0&&closeTab(cur)]];
+let pmode='cmd',pitems=[],psel=0;
+function palette(m){pmode=m;$('ov').style.display='flex';const i=$('pi');i.value='';i.placeholder=m==='files'?'Find or create a note…':'Type a command…';i.focus();plist()}
+function plist(){const q=$('pi').value.toLowerCase();pitems=pmode==='files'?Object.keys(files).filter(n=>n.endsWith('.md')&&n.toLowerCase().includes(q)).sort().slice(0,40).map(n=>[n.replace(/\.md$/,''),'',()=>openNote(n)]):cmds.filter(c=>c[0].toLowerCase().includes(q));
+ if(pmode==='files'&&q&&!pitems.some(p=>p[0].toLowerCase()===q))pitems.push(['Create: '+$('pi').value,'',()=>openNote($('pi').value)]);
+ psel=Math.min(psel,Math.max(0,pitems.length-1));const l=$('pl');l.replaceChildren();pitems.forEach((p,i)=>{const d=document.createElement('div');d.className='row'+(i===psel?' act':'');d.innerHTML=`<span>${esc(p[0])}</span>${p[1]?`<kbd style="margin-left:auto">${p[1]}</kbd>`:''}`;d.onclick=()=>pick(i);l.append(d)})}
+function pick(i){const p=pitems[i];$('ov').style.display='none';if(p)run(async()=>p[2]())}
+$('pi').oninput=()=>{psel=0;plist()};
+$('pi').onkeydown=e=>{if(e.key==='ArrowDown'){psel=Math.min(psel+1,pitems.length-1);plist();e.preventDefault()}else if(e.key==='ArrowUp'){psel=Math.max(psel-1,0);plist();e.preventDefault()}else if(e.key==='Enter')pick(psel);else if(e.key==='Escape')$('ov').style.display='none'};
+$('ov').onmousedown=e=>{if(e.target===$('ov'))$('ov').style.display='none'};
+/* ---------- graph ---------- */
+let raf=0;function stopGraph(){cancelAnimationFrame(raf)}
+function openGraph(){const i=tabs.findIndex(t=>t.special==='graph');if(i>=0)return activate(i);if(cur>=0&&tabs[cur].special==='new')tabs[cur]={special:'graph'};else tabs.push({special:'graph'});activate(tabs.length-1)}
+function graph(v){v.innerHTML='<canvas id="gc"></canvas>';const cv=$('gc'),c=cv.getContext('2d'),W=cv.width=v.clientWidth,H=cv.height=v.clientHeight;
+ const names=Object.keys(notes),idx=new Map(names.map((n,i)=>[n,i])),E=[],deg=names.map(()=>0);
+ for(const n of names)for(const l of links(notes[n].text)){const t=resolve(l);if(idx.has(t)&&t!==n){E.push([idx.get(n),idx.get(t)]);deg[idx.get(n)]++;deg[idx.get(t)]++}}
+ const P=names.map((_,i)=>({x:W/2+Math.cos(i)*120*Math.random()*3,y:H/2+Math.sin(i)*120*Math.random()*3,vx:0,vy:0}));let hov=-1,drag=-1,tick=0;
+ const act=tabs.findIndex(t=>t.name)&&null;
+ cv.onmousemove=e=>{const r=cv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;if(drag>=0){P[drag].x=x;P[drag].y=y;tick=0;return}hov=P.findIndex((p,i)=>Math.hypot(p.x-x,p.y-y)<6+deg[i]);cv.style.cursor=hov>=0?'pointer':'default'};
+ cv.onmousedown=()=>{drag=hov};cv.onmouseup=()=>{if(drag>=0&&drag===hov&&tick>=0)openNote(names[drag]);drag=-1};
+ let moved=false;cv.addEventListener('mousemove',()=>{if(drag>=0)moved=true});cv.onmouseup=()=>{if(drag>=0&&!moved)openNote(names[drag]);drag=-1;moved=false};
+ (function frame(){tick++;if(tick<400){for(let i=0;i<P.length;i++){const a=P[i];a.vx+=(W/2-a.x)*.0008;a.vy+=(H/2-a.y)*.0008;for(let j=i+1;j<P.length;j++){const b=P[j];let dx=a.x-b.x,dy=a.y-b.y,d=dx*dx+dy*dy+.01;if(d<40000){const f=900/d,s=Math.sqrt(d);dx/=s;dy/=s;a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f}}}
+   for(const [i,j] of E){const a=P[i],b=P[j],dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1,f=(d-70)*.01;a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f}
+   for(const p of P){p.x+=p.vx*=.82;p.y+=p.vy*=.82}}
+  c.clearRect(0,0,W,H);c.strokeStyle='#555';c.lineWidth=1;c.beginPath();for(const [i,j] of E){c.moveTo(P[i].x,P[i].y);c.lineTo(P[j].x,P[j].y)}c.stroke();
+  c.font='12px sans-serif';c.textAlign='center';P.forEach((p,i)=>{c.fillStyle=i===hov?'#46d19c':deg[i]?'#aaa':'#777';c.beginPath();c.arc(p.x,p.y,3+Math.min(deg[i],8)*.7,0,7);c.fill();if(i===hov||P.length<60){c.fillStyle=i===hov?'#fff':'#999';c.fillText(base(names[i]),p.x,p.y-9)}});
+  raf=requestAnimationFrame(frame)})()}
+/* ---------- wiring ---------- */
+$('rSide').onclick=()=>$('side').classList.toggle('hide');$('rFiles').onclick=()=>setPanel('files');$('rSearch').onclick=()=>setPanel('search');$('rGraph').onclick=openGraph;$('rToday').onclick=today;$('rPal').onclick=()=>palette('cmd');
+$('rSync').onclick=()=>run(sync);$('rSet').onclick=()=>$('settings').showModal();$('bNew').onclick=()=>run(()=>newNote());$('bFolder').onclick=()=>{const f=prompt('Folder name for the new note');if(f)run(()=>newNote(f.replace(/\/?$/,'/')))};
+$('bSort').onclick=()=>{sortDesc=!sortDesc;drawTree();msg(sortDesc?'Name (Z to A)':'Name (A to Z)')};
+$('bCollapse').onclick=()=>{const all=[];for(const n of Object.keys(files)){const p=n.split('/');for(let i=1;i<p.length;i++)all.push(p.slice(0,i).join('/')+'/')}const open=all.some(p=>!closed.has(p));closed=open?new Set(all):new Set();localStorage.closed=JSON.stringify([...closed]);drawTree()};
+$('mode').onclick=toggleMode;$('rtog').onclick=()=>$('rs').classList.toggle('hide');$('q').oninput=doSearch;
+$('back').onclick=()=>{const n=hist.pop();if(n){if(tabs[cur]?.name)fwd.push(tabs[cur].name);openNoteNoHist(n)}};$('fwd').onclick=()=>{const n=fwd.pop();if(n){if(tabs[cur]?.name)hist.push(tabs[cur].name);openNoteNoHist(n)}};
+async function openNoteNoHist(n){const h=[...hist],f=[...fwd];await openNote(n);hist=h;fwd=f}
+addEventListener('keydown',e=>{const k=e.key.toLowerCase(),m=e.ctrlKey||e.metaKey;
+ if(m&&k==='s'){e.preventDefault();const t=tabs[cur];if(t)run(()=>save(t))}else if(m&&k==='n'){e.preventDefault();run(()=>newNote())}else if(m&&k==='o'){e.preventDefault();palette('files')}
+ else if(m&&k==='p'){e.preventDefault();palette('cmd')}else if(m&&k==='e'){e.preventDefault();toggleMode()}else if(m&&e.shiftKey&&k==='f'){e.preventDefault();setPanel('search')}
+ else if(m&&k==='w'&&cur>=0){e.preventDefault();closeTab(cur)}else if(k==='f2'&&tabs[cur]?.name){e.preventDefault();run(()=>rename(tabs[cur].name))}
+ else if(e.key==='Escape')$('ov').style.display='none'},true);
+onbeforeunload=e=>{if(tabs.some(t=>t.dirty)){e.preventDefault();e.returnValue=''}};
+addEventListener('resize',()=>{if(tabs[cur]?.special==='graph')render()});
+$('cancel').onclick=()=>{$('secret').value='';$('settings').close()};
+$('connection').onsubmit=async e=>{e.preventDefault();try{const r=await fetch('/connection',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({server:$('serverUrl').value,token:$('secret').value})});if(!r.ok)throw Error(await r.text());$('secret').value='';$('settings').close();msg('Connection saved. Use Sync (ribbon) to synchronize.')}catch(e){$('settingsError').textContent=e.message}};
+run(async()=>{await refresh();render()});
 </script></html>

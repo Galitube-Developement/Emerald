@@ -4,7 +4,7 @@ Emerald is a Rust Markdown notebook and an optional self-hosted sync server. Eac
 
 ## Open a notebook
 
-Install the Emerald client package or run `cargo run --locked --bin emerald`. It opens the editor in your browser and stores notes in Documents/Emerald by default. A private session token protects its local HTTP interface. To work in another folder, run:
+Install the Emerald client package or run `cargo run --locked --bin emerald`. It opens the editor in its own native window (WebView2 on Windows, WebKit on macOS and Linux) and stores notes in Documents/Emerald by default. A private session token protects its local HTTP interface. To work in another folder, run:
 
     emerald --vault "/path/to/notes"
 

@@ -19,6 +19,7 @@ subtle = "2"
 tempfile = "3"
 tokio = {version="1",features=["full"]}
 walkdir = "2"
-webbrowser = "1"
+tao = "0.34"
+wry = "0.53"
 pulldown-cmark = "0.13"
 ammonia = "4"
