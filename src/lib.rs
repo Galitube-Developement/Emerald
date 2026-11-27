@@ -4,7 +4,7 @@ use axum::{
     extract::{DefaultBodyLimit, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use serde::Deserialize;
@@ -171,44 +171,4 @@ pub fn api() -> Router<Vault> {
         .route("/file", get(read).put(write).delete(remove))
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
 }
-pub fn client() -> Router<Vault> {
-    api()
-        .route(
-            "/connection",
-            post(
-                |State(v): State<Vault>, h: HeaderMap, Json(c): Json<sync::Connection>| async move {
-                    check(&v, &h)?;
-                    sync::configure(&v, c).map_err(bad)
-                },
-            ),
-        )
-        .route(
-            "/",
-            get(|| async { axum::response::Html(include_str!("ui.html")) }),
-        )
-        .route(
-            "/preview",
-            post(
-                |State(v): State<Vault>, h: HeaderMap, s: String| async move {
-                    check(&v, &h)?;
-                    let mut html = String::new();
-                    pulldown_cmark::html::push_html(
-                        &mut html,
-                        pulldown_cmark::Parser::new_ext(&s, pulldown_cmark::Options::all()),
-                    );
-                    Ok::<_, ErrResp>(ammonia::clean(&html))
-                },
-            ),
-        )
-        .route(
-            "/sync",
-            post(|State(v): State<Vault>, h: HeaderMap| async move {
-                check(&v, &h)?;
-                tokio::task::spawn_blocking(move || sync::run(v))
-                    .await
-                    .map_err(bad)?
-                    .map_err(bad)
-            }),
-        )
-}
-mod sync;
+pub mod sync;
