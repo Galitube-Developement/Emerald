@@ -49,6 +49,7 @@ struct Notebook {
     vault: Vault,
     notes: BTreeMap<String, String>,
     doc: Document,
+    tabs: Vec<String>,
     view: View,
     query: String,
     new_name: String,
@@ -81,6 +82,7 @@ impl Notebook {
             vault: Vault::new(path, String::new())?,
             notes: Default::default(),
             doc: Default::default(),
+            tabs: Vec::new(),
             view: Default::default(),
             query: String::new(),
             new_name: String::new(),
@@ -119,6 +121,9 @@ impl Notebook {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), String::new()),
             Err(e) => return Err(e.into()),
         };
+        if !self.tabs.contains(&n) {
+            self.tabs.push(n.clone());
+        }
         self.doc = Document {
             name: n,
             text,
@@ -253,6 +258,7 @@ impl eframe::App for Notebook {
                     ui.heading("Emerald");
                     ui.small(self.vault.root.display().to_string());
                     ui.separator();
+                    ui.label("NEW NOTE");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.new_name)
                             .hint_text("Folder/Note name"),
@@ -289,6 +295,7 @@ impl eframe::App for Notebook {
                             .hint_text("Search notes or #tags"),
                     );
                     let q = self.query.to_lowercase();
+                    ui.label("FILES");
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for (n, t) in &self.notes {
                             if (q.is_empty()
@@ -305,103 +312,120 @@ impl eframe::App for Notebook {
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.label(&self.status);
         });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_enabled_ui(self.pending.is_none(), |ui| {
-                if self.view == View::Graph {
-                    ui.heading("Note graph");
-                    if ui.button("Back to editor").clicked() {
-                        self.view = View::Edit
-                    }
-                    if let Some(n) = self.graph(ui) {
-                        open = Some(n)
-                    }
-                    return;
-                }
-                if self.doc.name.is_empty() {
-                    ui.heading("Open or create a note");
-                    return;
-                }
-                ui.heading(&self.doc.name);
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.view, View::Edit, "Edit");
-                    ui.selectable_value(&mut self.view, View::Preview, "Preview");
-                    if ui.button("Save").clicked()
-                        || ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
-                    {
-                        result = self.save()
-                    }
-                    if ui.button("Delete…").clicked() {
-                        self.confirm_delete = true
-                    }
-                    if ui
-                        .button("Reload from disk")
-                        .on_hover_text("Discard this editor buffer and read the file again")
-                        .clicked()
-                    {
-                        result = self.load(self.doc.name.clone())
-                    }
-                });
-                if self.confirm_delete {
-                    ui.horizontal(|ui| {
-                        ui.label("Delete this note?");
-                        if ui.button("Delete").clicked() {
-                            result = (|| {
-                                let path = self.checked_path()?;
-                                if path.exists() {
-                                    fs::remove_file(path)?
-                                }
-                                self.notes.remove(&self.doc.name);
-                                self.doc = Document::default();
-                                self.confirm_delete = false;
-                                Ok(())
-                            })()
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(&ctx.style()).fill(Color32::from_rgb(30, 32, 38)))
+            .show(ctx, |ui| {
+                ui.add_enabled_ui(self.pending.is_none(), |ui| {
+                    if self.view == View::Graph {
+                        ui.heading("Note graph");
+                        if ui.button("Back to editor").clicked() {
+                            self.view = View::Edit
                         }
-                        if ui.button("Cancel").clicked() {
-                            self.confirm_delete = false
-                        }
-                    });
-                    if self.doc.name.is_empty() {
-                        return;
-                    }
-                }
-                ui.horizontal_wrapped(|ui| {
-                    for n in links(&self.doc.text) {
-                        if ui.link(&n).clicked() {
+                        if let Some(n) = self.graph(ui) {
                             open = Some(n)
                         }
+                        return;
                     }
-                });
-                ui.horizontal_wrapped(|ui| {
-                    for (n, t) in &self.notes {
-                        if links(t).any(|p| p == self.doc.name)
-                            && ui.link(format!("← {n}")).clicked()
-                        {
-                            open = Some(n.clone())
-                        }
+                    if self.doc.name.is_empty() {
+                        ui.heading("Open or create a note");
+                        return;
                     }
-                });
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .id_salt("document")
-                    .show(ui, |ui| {
-                        if self.view == View::Edit {
-                            if ui
-                                .add(
-                                    egui::TextEdit::multiline(&mut self.doc.text)
-                                        .desired_width(f32::INFINITY)
-                                        .desired_rows(26),
-                                )
-                                .changed()
-                            {
-                                self.doc.dirty = true;
-                                self.status = "Unsaved changes".into()
+                    ui.horizontal(|ui| {
+                        for tab in self.tabs.clone() {
+                            if ui.selectable_label(tab == self.doc.name, &tab).clicked() {
+                                open = Some(tab.clone());
                             }
-                        } else {
-                            CommonMarkViewer::new().show(ui, &mut self.cache, &self.doc.text);
+                            if ui.small_button("×").clicked() {
+                                self.tabs.retain(|t| t != &tab);
+                                if tab == self.doc.name {
+                                    open = self.tabs.last().cloned();
+                                }
+                            }
                         }
                     });
+                    ui.heading(&self.doc.name);
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.view, View::Edit, "Edit");
+                        ui.selectable_value(&mut self.view, View::Preview, "Preview");
+                        if ui.button("Save").clicked()
+                            || ctx.input_mut(|i| {
+                                i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)
+                            })
+                        {
+                            result = self.save()
+                        }
+                        if ui.button("Delete…").clicked() {
+                            self.confirm_delete = true
+                        }
+                        if ui
+                            .button("Reload from disk")
+                            .on_hover_text("Discard this editor buffer and read the file again")
+                            .clicked()
+                        {
+                            result = self.load(self.doc.name.clone())
+                        }
+                    });
+                    if self.confirm_delete {
+                        ui.horizontal(|ui| {
+                            ui.label("Delete this note?");
+                            if ui.button("Delete").clicked() {
+                                result = (|| {
+                                    let path = self.checked_path()?;
+                                    if path.exists() {
+                                        fs::remove_file(path)?
+                                    }
+                                    self.notes.remove(&self.doc.name);
+                                    self.doc = Document::default();
+                                    self.confirm_delete = false;
+                                    Ok(())
+                                })()
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.confirm_delete = false
+                            }
+                        });
+                        if self.doc.name.is_empty() {
+                            return;
+                        }
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        for n in links(&self.doc.text) {
+                            if ui.link(&n).clicked() {
+                                open = Some(n)
+                            }
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        for (n, t) in &self.notes {
+                            if links(t).any(|p| p == self.doc.name)
+                                && ui.link(format!("← {n}")).clicked()
+                            {
+                                open = Some(n.clone())
+                            }
+                        }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("document")
+                        .show(ui, |ui| {
+                            if self.view == View::Edit {
+                                if ui
+                                    .add(
+                                        egui::TextEdit::multiline(&mut self.doc.text)
+                                            .desired_width(f32::INFINITY)
+                                            .desired_rows(26),
+                                    )
+                                    .changed()
+                                {
+                                    self.doc.dirty = true;
+                                    self.status = "Unsaved changes".into()
+                                }
+                            } else {
+                                CommonMarkViewer::new().show(ui, &mut self.cache, &self.doc.text);
+                            }
+                        });
+                });
             });
-        });
         if let Some(n) = open {
             result = self.open(n)
         }
