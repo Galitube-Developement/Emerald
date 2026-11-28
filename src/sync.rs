@@ -41,14 +41,51 @@ pub fn configure(v: &Vault, c: Connection) -> Result<()> {
     ensure!(c.token.len() >= 32, "Enter the server token");
     atomic(&config_file(v)?, &serde_json::to_vec(&c)?)
 }
-pub fn run(v: Vault) -> Result<String> {
+/// What one sync pass did.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct Summary {
+    pub sent: usize,
+    pub received: usize,
+    pub conflicts: usize,
+}
+impl std::fmt::Display for Summary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.sent + self.received == 0 && self.conflicts == 0 {
+            return write!(f, "Up to date");
+        }
+        write!(f, "Sent {}, received {}", self.sent, self.received)?;
+        if self.conflicts > 0 {
+            write!(f, ", {} conflict{} saved as copies", self.conflicts, if self.conflicts == 1 { "" } else { "s" })?;
+        }
+        Ok(())
+    }
+}
+fn env_connection() -> Option<Connection> {
+    match (std::env::var("EMERALD_SERVER"), std::env::var("EMERALD_TOKEN")) {
+        (Ok(server), Ok(token)) => Some(Connection { server, token }),
+        _ => None,
+    }
+}
+/// The configured server address, and whether it comes from environment variables.
+pub fn current(v: &Vault) -> Option<(String, bool)> {
+    if let Some(c) = env_connection() {
+        return Some((c.server, true));
+    }
+    let c: Connection = serde_json::from_slice(&fs::read(config_file(v).ok()?).ok()?).ok()?;
+    Some((c.server, false))
+}
+/// Forget the saved connection for this vault. Environment variables are left alone.
+pub fn disconnect(v: &Vault) -> Result<()> {
+    match fs::remove_file(config_file(v)?) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+pub fn run(v: Vault) -> Result<Summary> {
     let _guard = v.lock.lock().unwrap();
-    let c = match (
-        std::env::var("EMERALD_SERVER"),
-        std::env::var("EMERALD_TOKEN"),
-    ) {
-        (Ok(server), Ok(token)) => Connection { server, token },
-        _ => serde_json::from_slice(
+    let c = match env_connection() {
+        Some(c) => c,
+        None => serde_json::from_slice(
             &fs::read(config_file(&v)?)
                 .map_err(|_| anyhow!("Configure a server in Sync settings"))?,
         )?,
@@ -80,7 +117,7 @@ pub fn run(v: Vault) -> Result<String> {
         .chain(base.keys())
         .cloned()
         .collect();
-    let mut conflicts = 0;
+    let mut sum = Summary::default();
     for n in names {
         let (l, r, b) = (local.get(&n), remote.get(&n), base.get(&n));
         let p = target(&v.root, &n)?;
@@ -104,7 +141,9 @@ pub fn run(v: Vault) -> Result<String> {
                     .send()?
                     .error_for_status()?;
                 end = l.cloned();
+                sum.sent += 1;
             } else {
+                sum.received += 1;
                 let incoming = if let Some(hash) = r {
                     let data = http
                         .get(file)
@@ -129,7 +168,7 @@ pub fn run(v: Vault) -> Result<String> {
                         ));
                         fs::copy(&p, copy)?;
                     }
-                    conflicts += 1;
+                    sum.conflicts += 1;
                 }
                 if let Some(data) = incoming {
                     atomic(&p, &data)?
@@ -145,9 +184,7 @@ pub fn run(v: Vault) -> Result<String> {
         }
         atomic(&state, &serde_json::to_vec(&base)?)?;
     }
-    Ok(format!(
-        "Sync complete. {conflicts} conflicts. Local conflict copies sync on the next pass."
-    ))
+    Ok(sum)
 }
 pub fn configured(v: &Vault) -> bool {
     (std::env::var("EMERALD_SERVER").is_ok() && std::env::var("EMERALD_TOKEN").is_ok())

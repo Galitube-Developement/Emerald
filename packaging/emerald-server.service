@@ -1,0 +1,21 @@
+[Unit]
+Description=Emerald sync server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=emerald
+Group=emerald
+# Contains EMERALD_TOKEN=<64 hex characters>; readable by root only.
+EnvironmentFile=/etc/emerald/server.env
+ExecStartPre=/usr/bin/mkdir -p /var/lib/emerald/vault
+ExecStart=/usr/bin/emerald-server --folder /var/lib/emerald/vault --listen 127.0.0.1:7878
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/emerald
+
+[Install]
+WantedBy=multi-user.target
