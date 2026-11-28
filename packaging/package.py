@@ -10,7 +10,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 dist = root / "dist"
 dist.mkdir(exist_ok=True)
-version = "1.2.7"
+version = "1.2.8"
 
 def run(*args):
     subprocess.run(args, check=True)
