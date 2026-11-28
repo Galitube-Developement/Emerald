@@ -1,10 +1,19 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 use anyhow::{ensure, Result};
 use clap::Parser;
-use eframe::egui::{self, Color32, Pos2, Vec2};
+use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use emerald::{atomic, digest, index, sync, target, Vault};
-use std::{collections::BTreeMap, fs, path::PathBuf, sync::mpsc, time::{Duration, Instant}};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::{Duration, Instant},
+};
 
 #[derive(Parser)]
 struct Args {
@@ -51,7 +60,7 @@ fn main() -> eframe::Result<()> {
         "Emerald",
         options,
         Box::new(move |cc| {
-            theme(&cc.egui_ctx);
+            fonts(&cc.egui_ctx);
             let mut app = Notebook::new(path)?;
             app.show_log = verbose;
             let flag = app.vault.root.join(".emerald-tour");
@@ -63,16 +72,60 @@ fn main() -> eframe::Result<()> {
         }),
     )
 }
-const BG: Color32 = Color32::from_rgb(0x1e, 0x1e, 0x1e);
-const SIDE: Color32 = Color32::from_rgb(0x26, 0x26, 0x26);
-const RIBBON: Color32 = Color32::from_rgb(0x16, 0x16, 0x16);
-const LINE: Color32 = Color32::from_rgb(0x36, 0x36, 0x36);
-const TEXT: Color32 = Color32::from_rgb(0xda, 0xda, 0xda);
-const MUTED: Color32 = Color32::from_rgb(0x99, 0x99, 0x99);
-const HOVER: Color32 = Color32::from_rgb(0x2f, 0x2f, 0x2f);
-const SEL: Color32 = Color32::from_rgb(0x3a, 0x3a, 0x3a);
-const ACCENT: Color32 = Color32::from_rgb(0x2f, 0xb5, 0x83);
-fn theme(ctx: &egui::Context) {
+
+// ---------------------------------------------------------------- theme
+
+struct Pal {
+    bg: Color32,
+    side: Color32,
+    ribbon: Color32,
+    line: Color32,
+    text: Color32,
+    muted: Color32,
+    hover: Color32,
+    sel: Color32,
+    accent: Color32,
+    link: Color32,
+    red: Color32,
+    amber: Color32,
+}
+const DARK: Pal = Pal {
+    bg: Color32::from_rgb(0x1e, 0x1e, 0x1e),
+    side: Color32::from_rgb(0x26, 0x26, 0x26),
+    ribbon: Color32::from_rgb(0x16, 0x16, 0x16),
+    line: Color32::from_rgb(0x36, 0x36, 0x36),
+    text: Color32::from_rgb(0xda, 0xda, 0xda),
+    muted: Color32::from_rgb(0x99, 0x99, 0x99),
+    hover: Color32::from_rgb(0x2f, 0x2f, 0x2f),
+    sel: Color32::from_rgb(0x3a, 0x3a, 0x3a),
+    accent: Color32::from_rgb(0x2f, 0xb5, 0x83),
+    link: Color32::from_rgb(0x46, 0xd1, 0x9c),
+    red: Color32::from_rgb(0xe5, 0x53, 0x4b),
+    amber: Color32::from_rgb(0xf0, 0xa7, 0x3a),
+};
+const LIGHT: Pal = Pal {
+    bg: Color32::from_rgb(0xff, 0xff, 0xff),
+    side: Color32::from_rgb(0xf5, 0xf6, 0xf5),
+    ribbon: Color32::from_rgb(0xeb, 0xed, 0xec),
+    line: Color32::from_rgb(0xdc, 0xdf, 0xdd),
+    text: Color32::from_rgb(0x1f, 0x24, 0x21),
+    muted: Color32::from_rgb(0x6b, 0x71, 0x6d),
+    hover: Color32::from_rgb(0xe9, 0xec, 0xea),
+    sel: Color32::from_rgb(0xdd, 0xe3, 0xdf),
+    accent: Color32::from_rgb(0x1f, 0x9a, 0x6c),
+    link: Color32::from_rgb(0x15, 0x8a, 0x5e),
+    red: Color32::from_rgb(0xc9, 0x3a, 0x31),
+    amber: Color32::from_rgb(0xb8, 0x6e, 0x00),
+};
+static IS_LIGHT: AtomicBool = AtomicBool::new(false);
+fn pal() -> &'static Pal {
+    if IS_LIGHT.load(Ordering::Relaxed) {
+        &LIGHT
+    } else {
+        &DARK
+    }
+}
+fn fonts(ctx: &egui::Context) {
     egui_extras::install_image_loaders(ctx);
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -83,37 +136,12 @@ fn theme(ctx: &egui::Context) {
         "inter-bold".into(),
         std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../../assets/Inter-SemiBold.ttf"))),
     );
-    fonts.families.insert(egui::FontFamily::Proportional, vec!["inter".into()]);
-    fonts.families.insert(egui::FontFamily::Name("bold".into()), vec!["inter-bold".into()]);
+    // Inter first; keep egui's bundled fonts as fallbacks for symbols such as ⟳.
+    let fallback = fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default();
+    fonts.families.insert(egui::FontFamily::Proportional, [vec!["inter".to_owned()], fallback.clone()].concat());
+    fonts.families.insert(egui::FontFamily::Name("bold".into()), [vec!["inter-bold".to_owned()], fallback].concat());
     fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().insert(0, "inter".into());
     ctx.set_fonts(fonts);
-    let mut v = egui::Visuals::dark();
-    v.panel_fill = BG;
-    v.window_fill = SIDE;
-    v.extreme_bg_color = BG;
-    v.faint_bg_color = SIDE;
-    v.override_text_color = Some(TEXT);
-    v.selection.bg_fill = Color32::from_rgba_unmultiplied(0x27, 0xa7, 0x7a, 0x55);
-    v.selection.stroke = egui::Stroke::new(1., ACCENT);
-    v.hyperlink_color = Color32::from_rgb(0x46, 0xd1, 0x9c);
-    v.window_stroke = egui::Stroke::new(1., LINE);
-    v.window_corner_radius = egui::CornerRadius::same(10);
-    let r = egui::CornerRadius::same(5);
-    let w = &mut v.widgets;
-    w.noninteractive.bg_stroke = egui::Stroke::new(1., LINE);
-    w.inactive.weak_bg_fill = BG;
-    w.inactive.bg_fill = BG;
-    w.inactive.bg_stroke = egui::Stroke::new(1., LINE);
-    w.hovered.weak_bg_fill = HOVER;
-    w.hovered.bg_fill = HOVER;
-    w.hovered.bg_stroke = egui::Stroke::new(1., LINE);
-    w.active.weak_bg_fill = SEL;
-    w.active.bg_fill = SEL;
-    w.active.bg_stroke = egui::Stroke::new(1., LINE);
-    for x in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
-        x.corner_radius = r;
-    }
-    ctx.set_visuals(v);
     ctx.style_mut(|s| {
         s.spacing.item_spacing = Vec2::new(6., 3.);
         s.spacing.button_padding = Vec2::new(10., 5.);
@@ -122,6 +150,41 @@ fn theme(ctx: &egui::Context) {
             f.size = (f.size * 0.95).max(12.);
         }
     });
+}
+fn apply_theme(ctx: &egui::Context, light: bool) {
+    IS_LIGHT.store(light, Ordering::Relaxed);
+    let p = pal();
+    let mut v = if light { egui::Visuals::light() } else { egui::Visuals::dark() };
+    v.panel_fill = p.bg;
+    v.window_fill = p.side;
+    v.extreme_bg_color = p.bg;
+    v.faint_bg_color = p.side;
+    v.selection.bg_fill = Color32::from_rgba_unmultiplied(0x27, 0xa7, 0x7a, 0x55);
+    // Colour of selected text (tabs, toggles, tree rows): readable on the green fill.
+    v.selection.stroke = egui::Stroke::new(1.0_f32, if light { p.text } else { Color32::WHITE });
+    v.text_cursor.stroke = egui::Stroke::new(2.0_f32, p.accent);
+    v.hyperlink_color = p.link;
+    v.window_stroke = egui::Stroke::new(1.0_f32, p.line);
+    v.window_corner_radius = egui::CornerRadius::same(10);
+    let r = egui::CornerRadius::same(5);
+    let w = &mut v.widgets;
+    w.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, p.line);
+    w.inactive.weak_bg_fill = p.bg;
+    w.inactive.bg_fill = p.bg;
+    w.inactive.bg_stroke = egui::Stroke::new(1.0_f32, p.line);
+    w.hovered.weak_bg_fill = p.hover;
+    w.hovered.bg_fill = p.hover;
+    w.hovered.bg_stroke = egui::Stroke::new(1.0_f32, p.line);
+    w.active.weak_bg_fill = p.sel;
+    w.active.bg_fill = p.sel;
+    w.active.bg_stroke = egui::Stroke::new(1.0_f32, p.line);
+    // Text colour via the widget strokes rather than override_text_color, which would
+    // also repaint hyperlinks in plain text colour.
+    for x in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+        x.corner_radius = r;
+        x.fg_stroke.color = p.text;
+    }
+    ctx.set_visuals(v);
 }
 macro_rules! ico {
     ($n:literal) => {
@@ -150,7 +213,31 @@ fn svg(name: &str) -> egui::ImageSource<'static> {
         _ => ico!("panel"),
     }
 }
-fn banner_flag(root: &std::path::Path) -> PathBuf {
+/// Obsidian-style icon button: 30x28, muted icon, hover/selected background.
+fn ib(ui: &mut egui::Ui, name: &str, tip: &str, on: bool) -> egui::Response {
+    let p = pal();
+    let (rect, r) = ui.allocate_exact_size(Vec2::new(30., 28.), egui::Sense::click());
+    if on || r.hovered() {
+        ui.painter().rect_filled(rect, 5., if on { p.sel } else { p.hover });
+    }
+    let c = if on || r.hovered() { p.text } else { p.muted };
+    egui::Image::new(svg(name))
+        .tint(c)
+        .fit_to_exact_size(Vec2::splat(18.))
+        .paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(18.)));
+    r.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+fn primary(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let p = pal();
+    ui.add(egui::Button::new(egui::RichText::new(text).color(Color32::WHITE).strong()).fill(p.accent))
+}
+fn muted(t: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(t.into()).color(pal().muted)
+}
+
+// ---------------------------------------------------------------- pure helpers
+
+fn banner_flag(root: &Path) -> PathBuf {
     root.join(".emerald-nobanner")
 }
 /// Open `[[` link at the cursor: (char index where the name starts, cursor, typed name).
@@ -163,9 +250,139 @@ fn pick_at(text: &str, cursor: usize) -> Option<(usize, usize, String)> {
     }
     Some((before[..at].chars().count() + 2, cursor, q.to_owned()))
 }
+fn links(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split("[[")
+        .skip(1)
+        .filter_map(|s| s.split_once("]]"))
+        .map(|(s, _)| s.split('|').next().unwrap_or(s))
+        .filter(|s| !s.contains('\n') && !s.trim().is_empty())
+        .map(note_name)
+}
+/// Links in first-seen order without repeats.
+fn unique_links(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for l in links(text) {
+        if !out.contains(&l) {
+            out.push(l)
+        }
+    }
+    out
+}
+fn note_name(name: &str) -> String {
+    let name = name.trim();
+    if name.ends_with(".md") {
+        name.to_owned()
+    } else {
+        format!("{name}.md")
+    }
+}
+fn stem(n: &str) -> &str {
+    n.trim_end_matches(".md")
+}
+/// Last path segment without `.md`.
+fn leaf(n: &str) -> &str {
+    stem(n).rsplit('/').next().unwrap_or(n)
+}
+/// Folder part including the trailing slash, or "".
+fn folder_of(n: &str) -> &str {
+    match n.rfind('/') {
+        Some(i) => &n[..=i],
+        None => "",
+    }
+}
+/// Turn `[[Note]]` and `[[Note|label]]` into Markdown links the preview can follow.
+fn wiki_to_md(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("[[") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        match after.find("]]") {
+            Some(j) if !after[..j].contains('\n') && !after[..j].trim().is_empty() => {
+                let inner = &after[..j];
+                let (target, label) = inner.split_once('|').unwrap_or((inner, leaf(inner.trim())));
+                out.push_str(&format!("[{}](<emerald:{}>)", label.trim(), stem(target.trim())));
+                rest = &after[j + 2..];
+            }
+            _ => {
+                out.push_str("[[");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+/// `Notes/Idea-conflict-0123456789abcdef.md` -> `Notes/Idea.md`.
+fn conflict_original(n: &str) -> Option<String> {
+    let (base, ext) = n.rsplit_once('.')?;
+    let (orig, hash) = base.rsplit_once("-conflict-")?;
+    (hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit())).then(|| format!("{orig}.{ext}"))
+}
+/// `.trash/20261128-110501-Work__Plan.md` -> (`Work/Plan.md`, `2026-11-28 11:05`).
+fn trash_entry(file: &str) -> Option<(String, String)> {
+    let (date, rest) = file.split_once('-')?;
+    let (time, flat) = rest.split_once('-')?;
+    if date.len() != 8 || time.len() != 6 {
+        return None;
+    }
+    let when = format!("{}-{}-{} {}:{}", &date[..4], &date[4..6], &date[6..], &time[..2], &time[2..4]);
+    Some((flat.replace("__", "/"), when))
+}
+/// Subsequence match score (higher is better), or None.
+fn fuzzy(hay: &str, q: &str) -> Option<i32> {
+    if q.is_empty() {
+        return Some(0);
+    }
+    let hay = hay.to_lowercase();
+    let q = q.to_lowercase();
+    if let Some(i) = hay.find(&q) {
+        return Some(1000 - i as i32 - hay.len() as i32);
+    }
+    let mut it = hay.chars();
+    let mut gaps = 0;
+    for c in q.chars() {
+        let mut found = false;
+        for h in it.by_ref() {
+            if h == c {
+                found = true;
+                break;
+            }
+            gaps += 1;
+        }
+        if !found {
+            return None;
+        }
+    }
+    Some(500 - gaps)
+}
+fn ago(t: Instant) -> String {
+    let s = t.elapsed().as_secs();
+    match s {
+        0..=9 => "just now".into(),
+        10..=59 => format!("{s} s ago"),
+        60..=3599 => format!("{} min ago", s / 60),
+        _ => format!("{} h ago", s / 3600),
+    }
+}
+fn plural(n: usize, one: &str) -> String {
+    format!("{n} {one}{}", if n == 1 { "" } else { "s" })
+}
+fn reveal(path: &Path) {
+    let dir = if path.is_dir() { path.to_path_buf() } else { path.parent().map(Path::to_path_buf).unwrap_or_default() };
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(opener).arg(dir).spawn();
+}
+
 #[cfg(test)]
 mod tests {
-    use super::pick_at;
+    use super::*;
     #[test]
     fn picker_opens_after_double_bracket() {
         assert_eq!(pick_at("hi [[", 5), Some((5, 5, String::new())));
@@ -178,26 +395,112 @@ mod tests {
         assert_eq!(pick_at("[[a\nb", 5), None);
         assert_eq!(pick_at("plain", 5), None);
     }
-}
-/// Obsidian-style icon button: 30x28, muted icon, hover/selected background.
-fn ib(ui: &mut egui::Ui, name: &str, tip: &str, on: bool) -> egui::Response {
-    let (rect, r) = ui.allocate_exact_size(Vec2::new(30., 28.), egui::Sense::click());
-    if on || r.hovered() {
-        ui.painter().rect_filled(rect, 5., if on { SEL } else { HOVER });
+    #[test]
+    fn links_are_deduplicated_and_aliases_dropped() {
+        assert_eq!(unique_links("[[A]] [[B|bee]] [[A]] [[ ]]"), vec!["A.md", "B.md"]);
     }
-    let c = if on || r.hovered() { TEXT } else { MUTED };
-    egui::Image::new(svg(name))
-        .tint(c)
-        .fit_to_exact_size(Vec2::splat(18.))
-        .paint_at(ui, egui::Rect::from_center_size(rect.center(), Vec2::splat(18.)));
-    r.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand)
+    #[test]
+    fn wiki_links_become_markdown() {
+        assert_eq!(wiki_to_md("see [[Work/Plan]]."), "see [Plan](<emerald:Work/Plan>).");
+        assert_eq!(wiki_to_md("[[A|the a]]"), "[the a](<emerald:A>)");
+        assert_eq!(wiki_to_md("open [[ only"), "open [[ only");
+    }
+    #[test]
+    fn names_split_into_parts() {
+        assert_eq!(leaf("Work/Meetings/Kickoff.md"), "Kickoff");
+        assert_eq!(folder_of("Work/Meetings/Kickoff.md"), "Work/Meetings/");
+        assert_eq!(folder_of("Top.md"), "");
+    }
+    #[test]
+    fn conflict_copies_map_to_originals() {
+        assert_eq!(conflict_original("A/Idea-conflict-0123456789abcdef.md").as_deref(), Some("A/Idea.md"));
+        assert_eq!(conflict_original("Idea-conflict-xyz.md"), None);
+        assert_eq!(conflict_original("Idea.md"), None);
+    }
+    #[test]
+    fn trash_names_decode() {
+        assert_eq!(
+            trash_entry("20261128-110501-Work__Plan.md"),
+            Some(("Work/Plan.md".into(), "2026-11-28 11:05".into()))
+        );
+        assert_eq!(trash_entry("junk.md"), None);
+    }
+    #[test]
+    fn fuzzy_prefers_contiguous_matches() {
+        assert!(fuzzy("Website redesign", "web").unwrap() > fuzzy("Weekly sync", "wey").unwrap_or(-1));
+        assert!(fuzzy("Kickoff", "kff").is_some());
+        assert!(fuzzy("Kickoff", "zz").is_none());
+    }
 }
-#[derive(Default, PartialEq)]
+
+// ---------------------------------------------------------------- persisted settings
+
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Copy, PartialEq)]
+enum ThemePref {
+    #[default]
+    System,
+    Dark,
+    Light,
+}
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct Prefs {
+    theme: ThemePref,
+    recent: Vec<PathBuf>,
+}
+#[derive(serde::Serialize, serde::Deserialize, Default, PartialEq, Clone)]
+struct Session {
+    tabs: Vec<String>,
+    active: String,
+    sidebar: bool,
+    sort_desc: bool,
+    hide_links: bool,
+}
+fn config_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("Emerald"))
+}
+fn load_json<T: serde::de::DeserializeOwned + Default>(p: Option<PathBuf>) -> T {
+    p.and_then(|p| fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+fn save_json<T: serde::Serialize>(p: Option<PathBuf>, v: &T) {
+    if let Some(p) = p {
+        if let Some(d) = p.parent() {
+            let _ = fs::create_dir_all(d);
+        }
+        if let Ok(b) = serde_json::to_vec_pretty(v) {
+            let _ = atomic(&p, &b);
+        }
+    }
+}
+fn prefs_file() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("app.json"))
+}
+fn session_file(root: &Path) -> Option<PathBuf> {
+    config_dir().map(|d| d.join(format!("session-{}.json", digest(root.to_string_lossy().as_bytes()))))
+}
+
+// ---------------------------------------------------------------- state
+
+#[derive(Default, PartialEq, Clone, Copy)]
 enum View {
     #[default]
     Edit,
     Preview,
     Graph,
+}
+#[derive(Default, PartialEq, Clone, Copy)]
+enum Section {
+    #[default]
+    Sync,
+    Appearance,
+    Vault,
+    Shortcuts,
+}
+#[derive(PartialEq)]
+enum SyncState {
+    Off,
+    Idle,
+    Syncing,
+    Error(String),
 }
 
 #[derive(Default)]
@@ -206,6 +509,18 @@ struct Document {
     text: String,
     saved: String,
     dirty: bool,
+}
+
+/// Things the file tree's menus ask the app to do.
+enum Act {
+    Open(String),
+    Rename(String),
+    Move(String),
+    Duplicate(String),
+    Delete(String),
+    NewIn(String),
+    RenameFolder(String),
+    Reveal(String),
 }
 
 #[derive(Default)]
@@ -217,12 +532,10 @@ impl Tree {
     fn add(&mut self, full: &str, rest: &str) {
         match rest.split_once('/') {
             Some((d, r)) => self.dirs.entry(d.to_owned()).or_default().add(full, r),
-            None => self
-                .files
-                .push((full.to_owned(), rest.trim_end_matches(".md").to_owned())),
+            None => self.files.push((full.to_owned(), stem(rest).to_owned())),
         }
     }
-    fn show(&self, ui: &mut egui::Ui, cur: &str, open: &mut Option<String>, del: &mut Option<String>, force: bool, desc: bool, collapse: bool) {
+    fn show(&self, ui: &mut egui::Ui, path: &str, cur: &str, act: &mut Option<Act>, desc: bool, collapse: bool) {
         let mut dirs: Vec<_> = self.dirs.iter().collect();
         let mut files: Vec<_> = self.files.iter().collect();
         if desc {
@@ -230,28 +543,51 @@ impl Tree {
             files.reverse();
         }
         for (d, t) in dirs {
-            let state = if force { Some(true) } else if collapse { Some(false) } else { None };
-            egui::CollapsingHeader::new(d)
+            let full = format!("{path}{d}/");
+            let r = egui::CollapsingHeader::new(d)
+                .id_salt(&full)
                 .default_open(true)
-                .open(state)
-                .show(ui, |ui| t.show(ui, cur, open, del, force, desc, collapse));
+                .open(collapse.then_some(false))
+                .show(ui, |ui| t.show(ui, &full, cur, act, desc, collapse));
+            r.header_response.context_menu(|ui| {
+                if ui.button("New note here").clicked() {
+                    *act = Some(Act::NewIn(full.clone()));
+                    ui.close_menu();
+                }
+                if ui.button("Rename folder…").clicked() {
+                    *act = Some(Act::RenameFolder(full.clone()));
+                    ui.close_menu();
+                }
+                if ui.button("Reveal in file manager").clicked() {
+                    *act = Some(Act::Reveal(full.clone()));
+                    ui.close_menu();
+                }
+            });
         }
         for (full, name) in files {
             let r = ui.selectable_label(full == cur, name);
             if r.clicked() {
-                *open = Some(full.clone())
+                *act = Some(Act::Open(full.clone()))
             }
             r.context_menu(|ui| {
-                if ui.button("Open").clicked() {
-                    *open = Some(full.clone());
-                    ui.close_menu();
-                }
+                let mut pick = |ui: &mut egui::Ui, label: &str, a: Act| {
+                    if ui.button(label).clicked() {
+                        *act = Some(a);
+                        ui.close_menu();
+                    }
+                };
+                pick(ui, "Open", Act::Open(full.clone()));
+                pick(ui, "Rename…", Act::Rename(full.clone()));
+                pick(ui, "Move to folder…", Act::Move(full.clone()));
+                pick(ui, "Duplicate", Act::Duplicate(full.clone()));
                 if ui.button("Copy link").clicked() {
-                    ui.ctx().copy_text(format!("[[{name}]]"));
+                    ui.ctx().copy_text(format!("[[{}]]", stem(full)));
                     ui.close_menu();
                 }
-                if ui.button("Delete").clicked() {
-                    *del = Some(full.clone());
+                pick(ui, "Reveal in file manager", Act::Reveal(full.clone()));
+                ui.separator();
+                if ui.button(egui::RichText::new("Delete…").color(pal().red)).clicked() {
+                    *act = Some(Act::Delete(full.clone()));
                     ui.close_menu();
                 }
             });
@@ -260,121 +596,197 @@ impl Tree {
 }
 
 struct Notebook {
-    sidebar: bool,
-    searching: bool,
-    sort_desc: bool,
-    collapse: Option<bool>,
-    focus_search: bool,
     vault: Vault,
     notes: BTreeMap<String, String>,
     doc: Document,
     tabs: Vec<String>,
     view: View,
+    // sidebar
+    sidebar: bool,
+    sort_desc: bool,
+    collapse: bool,
     query: String,
-    new_name: String,
-    confirm_delete: bool,
+    focus_search: bool,
+    new_folder: Option<String>,
+    folder_err: Option<String>,
+    // prompts
+    move_win: Option<(String, String)>,
+    folder_rename: Option<(String, String)>,
+    confirm_delete: Option<String>,
+    // editor
     title: String,
     focus_title: bool,
+    select_title: bool,
     focus_editor: bool,
     last_edit: Option<Instant>,
-    status_err: bool,
-    sync_ok: bool,
-    banner_off: bool,
-    undo: Option<(String, PathBuf)>,
-    palette: bool,
-    pal_query: String,
     pick: Option<(usize, usize, String)>,
+    pick_sel: usize,
+    hide_links: bool,
+    // status
+    status: String,
+    status_err: bool,
+    status_at: Instant,
+    undo: Option<(String, PathBuf, Instant)>,
     log: Vec<String>,
     show_log: bool,
+    // sync
+    sync_state: SyncState,
+    last_sync: Option<Instant>,
+    banner_off: bool,
+    pending: Option<mpsc::Receiver<Result<sync::Summary>>>,
+    last_auto_sync: Instant,
+    close_after_sync: bool,
+    // windows
+    palette: bool,
+    pal_query: String,
+    pal_sel: usize,
     vault_win: Option<String>,
     tour: Option<usize>,
+    tour_rects: [Option<Rect>; 4],
+    settings: Option<Section>,
+    edit_server: bool,
+    server: String,
+    secret: String,
+    show_secret: bool,
     test_rx: Option<mpsc::Receiver<Result<String>>>,
     test_msg: Option<(bool, String)>,
+    trash: bool,
+    trash_confirm: Option<String>,
+    compare: Option<String>,
+    // graph
     gpos: BTreeMap<String, Vec2>,
     gzoom: f32,
     gpan: Vec2,
-    settings: bool,
-    server: String,
-    secret: String,
-    status: String,
+    gfilter: String,
+    glocal: bool,
+    glabels: bool,
+    // misc
+    prefs: Prefs,
+    light: Option<bool>,
+    saved_session: Session,
     cache: CommonMarkCache,
-    pending: Option<mpsc::Receiver<Result<String>>>,
-    last_auto_sync: Instant,
 }
-fn links(text: &str) -> impl Iterator<Item = String> + '_ {
-    text.split("[[")
-        .skip(1)
-        .filter_map(|s| s.split_once("]]"))
-        .map(|(s, _)| note_name(s))
-        .filter(|s| !s.contains('\n'))
-}
-fn note_name(name: &str) -> String {
-    let name = name.trim();
-    if name.ends_with(".md") {
-        name.to_owned()
-    } else {
-        format!("{name}.md")
-    }
-}
+
 impl Notebook {
     fn new(path: PathBuf) -> Result<Self> {
+        let mut prefs: Prefs = load_json(prefs_file());
+        let canon = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        prefs.recent.retain(|p| p != &canon);
+        prefs.recent.insert(0, canon);
+        prefs.recent.truncate(8);
+        save_json(prefs_file(), &prefs);
+        let session: Session = load_json(session_file(&path));
         let mut app = Self {
-            sidebar: true,
-            searching: false,
-            sort_desc: false,
-            collapse: None,
-            focus_search: false,
             vault: Vault::new(path, String::new())?,
             notes: Default::default(),
             doc: Default::default(),
             tabs: Vec::new(),
-            view: Default::default(),
+            view: View::Edit,
+            sidebar: true,
+            sort_desc: false,
+            collapse: false,
             query: String::new(),
-            new_name: String::new(),
-            confirm_delete: false,
+            focus_search: false,
+            new_folder: None,
+            folder_err: None,
+            move_win: None,
+            folder_rename: None,
+            confirm_delete: None,
             title: String::new(),
             focus_title: false,
+            select_title: false,
             focus_editor: false,
             last_edit: None,
-            status_err: false,
-            sync_ok: false,
-            banner_off: false,
-            undo: None,
-            palette: false,
-            pal_query: String::new(),
             pick: None,
+            pick_sel: 0,
+            hide_links: false,
+            status: String::new(),
+            status_err: false,
+            status_at: Instant::now(),
+            undo: None,
             log: Vec::new(),
             show_log: false,
+            sync_state: SyncState::Off,
+            last_sync: None,
+            banner_off: false,
+            pending: None,
+            last_auto_sync: Instant::now(),
+            close_after_sync: false,
+            palette: false,
+            pal_query: String::new(),
+            pal_sel: 0,
             vault_win: None,
             tour: None,
+            tour_rects: [None; 4],
+            settings: None,
+            edit_server: false,
+            server: String::new(),
+            secret: String::new(),
+            show_secret: false,
             test_rx: None,
             test_msg: None,
+            trash: false,
+            trash_confirm: None,
+            compare: None,
             gpos: BTreeMap::new(),
             gzoom: 1.,
             gpan: Vec2::ZERO,
-            settings: false,
-            server: String::new(),
-            secret: String::new(),
-            status: String::new(),
+            gfilter: String::new(),
+            glocal: false,
+            glabels: true,
+            prefs,
+            light: None,
+            saved_session: Session::default(),
             cache: Default::default(),
-            pending: None,
-            last_auto_sync: Instant::now(),
         };
         app.refresh()?;
-        app.sync_ok = sync::configured(&app.vault);
+        if sync::configured(&app.vault) {
+            app.sync_state = SyncState::Idle;
+        }
         app.banner_off = banner_flag(&app.vault.root).exists();
+        // Restore the previous session for this vault.
+        if session != Session::default() {
+            app.sidebar = session.sidebar;
+            app.sort_desc = session.sort_desc;
+            app.hide_links = session.hide_links;
+            app.tabs = session.tabs.iter().filter(|t| app.notes.contains_key(*t)).cloned().collect();
+            let active = if app.tabs.contains(&session.active) { Some(session.active.clone()) } else { app.tabs.last().cloned() };
+            if let Some(a) = active {
+                app.load(a)?;
+                app.focus_editor = false;
+            }
+        }
+        app.saved_session = app.session();
         Ok(app)
+    }
+    fn session(&self) -> Session {
+        Session {
+            tabs: self.tabs.clone(),
+            active: self.doc.name.clone(),
+            sidebar: self.sidebar,
+            sort_desc: self.sort_desc,
+            hide_links: self.hide_links,
+        }
+    }
+    fn say(&mut self, m: impl Into<String>) {
+        self.status = m.into();
+        self.status_err = false;
+        self.status_at = Instant::now();
+    }
+    fn fail(&mut self, e: impl std::fmt::Display) {
+        let m = e.to_string();
+        self.log_line(format!("error: {m}"));
+        self.status = m;
+        self.status_err = true;
+        self.status_at = Instant::now();
+    }
+    fn busy(&self) -> bool {
+        self.pending.is_some()
     }
     fn refresh(&mut self) -> Result<()> {
         let mut notes = BTreeMap::new();
-        for n in index(&self.vault.root)?
-            .into_keys()
-            .filter(|n| n.ends_with(".md"))
-        {
-            notes.insert(
-                n.clone(),
-                fs::read_to_string(target(&self.vault.root, &n)?)?,
-            );
+        for n in index(&self.vault.root)?.into_keys().filter(|n| n.ends_with(".md")) {
+            notes.insert(n.clone(), fs::read_to_string(target(&self.vault.root, &n)?)?);
         }
         self.notes = notes;
         Ok(())
@@ -392,35 +804,41 @@ impl Notebook {
         if !self.tabs.contains(&n) {
             self.tabs.push(n.clone());
         }
-        self.doc = Document {
-            name: n,
-            text,
-            saved,
-            dirty: false,
-        };
-        self.confirm_delete = false;
-        self.title = self.doc.name.trim_end_matches(".md").to_owned();
+        self.doc = Document { name: n, text, saved, dirty: false };
+        self.title = leaf(&self.doc.name).to_owned();
         self.focus_editor = true;
         self.last_edit = None;
-        self.view = View::Edit;
+        if self.view == View::Graph {
+            self.view = View::Edit;
+        }
         Ok(())
     }
-    fn fresh(&self) -> String {
+    fn fresh_in(&self, folder: &str) -> String {
         let mut i = 0;
         loop {
-            let n = if i == 0 { "Untitled.md".to_owned() } else { format!("Untitled {i}.md") };
+            let n = if i == 0 { format!("{folder}Untitled.md") } else { format!("{folder}Untitled {i}.md") };
             if !self.notes.contains_key(&n) && !self.tabs.contains(&n) {
                 return n;
             }
             i += 1;
         }
     }
+    /// Open a new untitled note with its title selected, ready to be named.
+    fn new_note(&mut self, folder: &str) -> Result<()> {
+        let n = self.fresh_in(folder);
+        self.open(n)?;
+        self.focus_title = true;
+        self.select_title = true;
+        self.focus_editor = false;
+        Ok(())
+    }
     fn rename_to(&mut self, to: String) -> Result<()> {
+        ensure!(!self.busy(), "Wait for sync to finish, then rename");
         let to = note_name(&to);
         if to == self.doc.name {
             return Ok(());
         }
-        ensure!(!self.notes.contains_key(&to), "A note with that name exists");
+        ensure!(!self.notes.contains_key(&to), "A note called \"{}\" already exists", stem(&to));
         self.save()?;
         let from = self.checked_path()?;
         let dest = target(&self.vault.root, &to)?;
@@ -439,7 +857,8 @@ impl Notebook {
                 *t = to.clone()
             }
         }
-        self.status = "Renamed".into();
+        self.title = leaf(&to).to_owned();
+        self.say(format!("Renamed to {}", stem(&to)));
         Ok(())
     }
     fn open(&mut self, n: String) -> Result<()> {
@@ -453,27 +872,124 @@ impl Notebook {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(e.into()),
         };
-        ensure!(
-            hash == self.doc.saved,
-            "File changed on disk. Copy your edits before reloading."
-        );
+        ensure!(hash == self.doc.saved, "File changed on disk. Copy your edits before reloading.");
         Ok(path)
     }
     fn save(&mut self) -> Result<()> {
-        if self.doc.name.is_empty()
-            || (!self.doc.dirty && !self.doc.saved.is_empty())
-            || (self.doc.text.is_empty() && self.doc.saved.is_empty())
-        {
+        if self.doc.name.is_empty() || (!self.doc.dirty && !self.doc.saved.is_empty()) || (self.doc.text.is_empty() && self.doc.saved.is_empty()) {
             return Ok(());
         }
         atomic(&self.checked_path()?, self.doc.text.as_bytes())?;
-        self.notes
-            .insert(self.doc.name.clone(), self.doc.text.clone());
+        self.notes.insert(self.doc.name.clone(), self.doc.text.clone());
         self.doc.saved = digest(self.doc.text.as_bytes());
         self.doc.dirty = false;
-        self.status = "Saved".into();
-        self.status_err = false;
+        self.say("Saved");
         Ok(())
+    }
+    fn close_tab(&mut self, tab: &str) -> Result<()> {
+        if tab == self.doc.name {
+            self.save()?;
+        }
+        self.tabs.retain(|t| t != tab);
+        if tab == self.doc.name {
+            match self.tabs.last().cloned() {
+                Some(n) => self.load(n)?,
+                None => {
+                    self.doc = Document::default();
+                    self.title.clear();
+                }
+            }
+        }
+        Ok(())
+    }
+    fn backlinks_of(&self, name: &str) -> Vec<String> {
+        self.notes
+            .iter()
+            .filter(|(n, t)| n.as_str() != name && links(t).any(|p| p == name))
+            .map(|(n, _)| n.clone())
+            .collect()
+    }
+    fn delete_note(&mut self, name: &str) -> Result<()> {
+        ensure!(!self.busy(), "Wait for sync to finish, then delete");
+        if self.doc.name != name {
+            self.open(name.to_owned())?;
+        }
+        let path = self.checked_path()?;
+        if path.exists() {
+            let dir = self.vault.root.join(".trash");
+            fs::create_dir_all(&dir)?;
+            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+            let dest = dir.join(format!("{stamp}-{}", name.replace('/', "__")));
+            fs::rename(&path, &dest)?;
+            self.undo = Some((name.to_owned(), dest, Instant::now()));
+        }
+        self.notes.remove(name);
+        self.tabs.retain(|t| t != name);
+        self.doc = Document::default();
+        self.title.clear();
+        if let Some(n) = self.tabs.last().cloned() {
+            self.load(n)?;
+        }
+        self.say(format!("Moved {} to Trash", leaf(name)));
+        Ok(())
+    }
+    fn restore(&mut self, name: &str, from: &Path) -> Result<()> {
+        let to = target(&self.vault.root, name)?;
+        ensure!(!to.exists(), "A note called \"{}\" already exists", stem(name));
+        if let Some(p) = to.parent() {
+            fs::create_dir_all(p)?
+        }
+        fs::rename(from, to)?;
+        self.refresh()?;
+        self.open(name.to_owned())?;
+        self.say(format!("Restored {}", leaf(name)));
+        Ok(())
+    }
+    fn rename_folder(&mut self, from: &str, to: &str) -> Result<()> {
+        ensure!(!self.busy(), "Wait for sync to finish, then rename");
+        let to = format!("{}/", to.trim().trim_matches('/'));
+        ensure!(to != "/", "Enter a folder name");
+        if to == from {
+            return Ok(());
+        }
+        self.save()?;
+        let src = target(&self.vault.root, from.trim_end_matches('/'))?;
+        let dst = target(&self.vault.root, to.trim_end_matches('/'))?;
+        ensure!(!dst.exists(), "A folder called \"{}\" already exists", to.trim_end_matches('/'));
+        if let Some(p) = dst.parent() {
+            fs::create_dir_all(p)?
+        }
+        fs::rename(src, dst)?;
+        let remap = |n: &str| match n.strip_prefix(from) {
+            Some(rest) => format!("{to}{rest}"),
+            None => n.to_owned(),
+        };
+        self.tabs = self.tabs.iter().map(|t| remap(t)).collect();
+        if !self.doc.name.is_empty() {
+            self.doc.name = remap(&self.doc.name);
+        }
+        self.refresh()?;
+        self.say(format!("Renamed folder to {}", to.trim_end_matches('/')));
+        Ok(())
+    }
+    fn duplicate(&mut self, name: &str) -> Result<()> {
+        self.save()?;
+        let text = self.notes.get(name).cloned().unwrap_or_default();
+        let base = stem(name);
+        let mut i = 1;
+        let copy = loop {
+            let c = format!("{base} copy{}.md", if i == 1 { String::new() } else { format!(" {i}") });
+            if !self.notes.contains_key(&c) {
+                break c;
+            }
+            i += 1;
+        };
+        atomic(&target(&self.vault.root, &copy)?, text.as_bytes())?;
+        self.notes.insert(copy.clone(), text);
+        self.open(copy)
+    }
+    fn conflicts(&self) -> Vec<String> {
+        self.notes.keys().filter(|n| conflict_original(n).is_some()).cloned().collect()
     }
     fn log_line(&mut self, m: String) {
         let t = chrono::Local::now().format("%H:%M:%S");
@@ -483,19 +999,22 @@ impl Notebook {
         }
     }
     fn sync(&mut self, ctx: &egui::Context) -> Result<()> {
+        if self.busy() {
+            return Ok(());
+        }
         self.save()?;
         let vault = self.vault.clone();
         let ctx = ctx.clone();
         let (tx, rx) = mpsc::channel();
         self.pending = Some(rx);
-        self.status = "Syncing…".into();
+        self.sync_state = SyncState::Syncing;
         std::thread::spawn(move || {
             let _ = tx.send(sync::run(vault));
             ctx.request_repaint();
         });
         Ok(())
     }
-    fn poll(&mut self) -> Result<()> {
+    fn poll(&mut self, ctx: &egui::Context) -> Result<()> {
         let Some(rx) = &self.pending else {
             return Ok(());
         };
@@ -505,21 +1024,25 @@ impl Notebook {
             Err(e) => Err(e.into()),
         };
         self.pending = None;
+        if self.close_after_sync {
+            let _ = self.save();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         let active_name = self.doc.name.clone();
         let active_hash = self.doc.saved.clone();
         self.refresh()?;
         if !active_name.is_empty() {
             match self.notes.get(&active_name) {
                 Some(text) if digest(text.as_bytes()) != active_hash => {
-                    // Update the open note only when sync actually changed it. Calling
-                    // load() on every poll steals editor focus and switches away from
-                    // other views, which looks like a brief window flash on Windows.
+                    // Update the open note only when sync actually changed it, without
+                    // stealing focus or switching views.
                     if !self.doc.dirty {
                         self.doc.text = text.clone();
                         self.doc.saved = digest(text.as_bytes());
                     }
                 }
-                None => {
+                None if !self.doc.saved.is_empty() => {
+                    self.tabs.retain(|t| t != &active_name);
                     self.doc = Document::default();
                     self.title.clear();
                     self.pick = None;
@@ -527,29 +1050,51 @@ impl Notebook {
                 _ => {}
             }
         }
-        let s = result.inspect_err(|e| self.log_line(format!("sync error: {e:#}")))?;
-        self.log_line(format!("sync: {s}"));
-        self.status = s;
-        self.status_err = false;
+        match result {
+            Ok(s) => {
+                if s.sent + s.received > 0 || s.conflicts > 0 {
+                    self.log_line(format!("sync: {s}"));
+                }
+                self.sync_state = SyncState::Idle;
+                self.last_sync = Some(Instant::now());
+            }
+            Err(e) => {
+                let m = format!("{e:#}");
+                self.log_line(format!("sync error: {m}"));
+                self.sync_state = SyncState::Error(m);
+            }
+        }
         Ok(())
     }
+    // ------------------------------------------------------------ graph
     fn graph(&mut self, ui: &mut egui::Ui) -> Option<String> {
-        let (response, p) = ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
+        let p = pal();
+        let (response, painter) = ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
         let r = response.rect;
-        let names: Vec<String> = self.notes.keys().cloned().collect();
-        let n = names.len();
-        self.gpos.retain(|k, _| self.notes.contains_key(k));
-        for (i, k) in names.iter().enumerate() {
-            self.gpos.entry(k.clone()).or_insert_with(|| {
-                let a = i as f32 * std::f32::consts::TAU / n.max(1) as f32;
-                Vec2::angled(a) * 160.
-            });
-        }
-        let edges: Vec<(String, String)> = self
+        let all_edges: Vec<(String, String)> = self
             .notes
             .iter()
             .flat_map(|(a, t)| links(t).filter(|l| self.notes.contains_key(l) && l != a).map(|l| (a.clone(), l)).collect::<Vec<_>>())
             .collect();
+        let f = self.gfilter.to_lowercase();
+        let cur = self.doc.name.clone();
+        let names: Vec<String> = self
+            .notes
+            .keys()
+            .filter(|k| f.is_empty() || k.to_lowercase().contains(&f))
+            .filter(|k| !self.glocal || cur.is_empty() || **k == cur || all_edges.iter().any(|(a, b)| (a == *k && *b == cur) || (b == *k && *a == cur)))
+            .cloned()
+            .collect();
+        let edges: Vec<(String, String)> = all_edges.into_iter().filter(|(a, b)| names.contains(a) && names.contains(b)).collect();
+        let n = names.len();
+        if n == 0 {
+            painter.text(r.center(), egui::Align2::CENTER_CENTER, "No notes match", egui::FontId::proportional(14.), p.muted);
+            return None;
+        }
+        self.gpos.retain(|k, _| self.notes.contains_key(k));
+        for (i, k) in names.iter().enumerate() {
+            self.gpos.entry(k.clone()).or_insert_with(|| Vec2::angled(i as f32 * std::f32::consts::TAU / n.max(1) as f32) * 160.);
+        }
         // force layout: repulsion, springs, gentle pull to centre
         let mut force: BTreeMap<String, Vec2> = names.iter().map(|k| (k.clone(), Vec2::ZERO)).collect();
         for i in 0..n {
@@ -571,10 +1116,9 @@ impl Notebook {
         let dragged_id = egui::Id::new("graph-drag");
         let mut dragging: Option<String> = ui.data(|d| d.get_temp(dragged_id));
         let to_screen = |v: Vec2, z: f32, pan: Vec2| r.center() + (v * z) + pan;
-        let hover = response.hover_pos();
-        let hit = hover.and_then(|h| {
-            names.iter().find(|k| to_screen(self.gpos[*k], self.gzoom, self.gpan).distance(h) < 14.).cloned()
-        });
+        let hit = response
+            .hover_pos()
+            .and_then(|h| names.iter().find(|k| to_screen(self.gpos[*k], self.gzoom, self.gpan).distance(h) < 14.).cloned());
         if response.drag_started() {
             dragging = hit.clone();
         }
@@ -600,113 +1144,130 @@ impl Notebook {
                 self.gzoom = (self.gzoom * (1. + scroll * 0.002)).clamp(0.3, 3.);
             }
         }
+        let mut moving = 0f32;
         for (k, f) in force {
             if dragging.as_ref() != Some(&k) {
                 let cur = self.gpos[&k];
-                *self.gpos.get_mut(&k).unwrap() += (f - cur * 0.01) * 0.5;
+                let step = (f - cur * 0.01) * 0.5;
+                moving = moving.max(step.length());
+                *self.gpos.get_mut(&k).unwrap() += step;
             }
         }
-        ui.ctx().request_repaint();
+        // Repaint only while the layout is still settling or being dragged.
+        if moving > 0.05 || dragging.is_some() {
+            ui.ctx().request_repaint();
+        }
         let (z, pan) = (self.gzoom, self.gpan);
         let near: Vec<&String> = match &hit {
             Some(h) => edges.iter().filter_map(|(a, b)| if a == h { Some(b) } else if b == h { Some(a) } else { None }).collect(),
             None => Vec::new(),
         };
+        let dimc = if IS_LIGHT.load(Ordering::Relaxed) { Color32::from_gray(0xc4) } else { Color32::from_gray(0x55) };
         for (a, b) in &edges {
             let on = hit.as_ref().is_some_and(|h| h == a || h == b);
-            let c = if on { ACCENT } else { Color32::from_gray(0x55) };
-            p.line_segment([to_screen(self.gpos[a], z, pan), to_screen(self.gpos[b], z, pan)], (if on { 1.8 } else { 1. }, c));
+            painter.line_segment([to_screen(self.gpos[a], z, pan), to_screen(self.gpos[b], z, pan)], (if on { 1.8_f32 } else { 1.0 }, if on { p.accent } else { dimc }));
         }
-        let mut clicked = None;
         for k in &names {
             let pos = to_screen(self.gpos[k], z, pan);
             let lit = hit.as_ref() == Some(k) || near.contains(&k);
             let dim = hit.is_some() && !lit;
-            let base = if dim { Color32::from_gray(0x55) } else { ACCENT };
-            p.circle_filled(pos, if hit.as_ref() == Some(k) { 8. } else { 6. } * z.sqrt(), base);
+            painter.circle_filled(pos, if hit.as_ref() == Some(k) { 8. } else { 6. } * z.sqrt(), if dim { dimc } else { p.accent });
             if *k == self.doc.name {
-                p.circle_stroke(pos, 10. * z.sqrt(), (1.5, TEXT));
+                painter.circle_stroke(pos, 10. * z.sqrt(), (1.5_f32, p.text));
             }
-            let mut label = k.rsplit('/').next().unwrap_or(k).trim_end_matches(".md").to_owned();
-            if label.chars().count() > 24 {
-                label = label.chars().take(23).collect::<String>() + "\u{2026}";
+            if self.glabels || lit {
+                let mut label = leaf(k).to_owned();
+                if label.chars().count() > 24 {
+                    label = label.chars().take(23).collect::<String>() + "\u{2026}";
+                }
+                painter.text(pos + Vec2::new(0., 10. * z.sqrt()), egui::Align2::CENTER_TOP, label, egui::FontId::proportional(13.), if dim { p.muted } else { p.text });
             }
-            p.text(
-                pos + Vec2::new(0., 10. * z.sqrt()),
-                egui::Align2::CENTER_TOP,
-                label,
-                egui::FontId::proportional(13.),
-                if dim { Color32::from_gray(0x66) } else { TEXT },
-            );
         }
         if let Some(h) = &hit {
-            response.clone().on_hover_text(h.as_str());
+            response.clone().on_hover_text(stem(h));
             if response.clicked() {
-                clicked = Some(h.clone());
+                return Some(h.clone());
             }
         }
-        clicked
+        None
     }
 }
+
+// ---------------------------------------------------------------- frame
+
 impl eframe::App for Notebook {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        if let Err(e) = self.poll() {
-            self.status = e.to_string();
-            self.status_err = true;
+        // Theme: follow the system unless the user picked one.
+        let light = match self.prefs.theme {
+            ThemePref::Light => true,
+            ThemePref::Dark => false,
+            ThemePref::System => ctx.system_theme() == Some(egui::Theme::Light),
+        };
+        if self.light != Some(light) {
+            apply_theme(ctx, light);
+            self.light = Some(light);
         }
-        let busy = self.pending.is_some();
+        let p = pal();
+        if let Err(e) = self.poll(ctx) {
+            self.fail(e);
+        }
+        let busy = self.busy();
         if ctx.input(|i| i.viewport().close_requested()) {
             if busy {
+                // Let the running sync finish, then close by itself.
+                self.close_after_sync = true;
+                self.say("Finishing sync, then closing…");
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose)
             } else if let Err(e) = self.save() {
-                self.status = e.to_string();
+                self.fail(e);
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose)
             }
         }
+        // Autosave one second after typing stops.
         if self.doc.dirty && !busy {
             if let Some(t) = self.last_edit {
-                if t.elapsed() >= Duration::from_secs(5) {
+                if t.elapsed() >= Duration::from_secs(1) {
                     self.last_edit = None;
                     if let Err(e) = self.save() {
-                        self.status = e.to_string();
-                        self.status_err = true;
+                        self.fail(e);
                     }
                 } else {
-                    ctx.request_repaint_after(Duration::from_millis(300));
+                    ctx.request_repaint_after(Duration::from_millis(250));
                 }
             }
         }
-        // Poll and synchronize changes from other clients while the vault is connected.
-        if self.sync_ok && !self.doc.dirty && self.pending.is_none() && self.last_auto_sync.elapsed() >= Duration::from_secs(5) {
-            self.last_auto_sync = Instant::now();
-            if let Err(e) = self.sync(ctx) {
-                self.status = e.to_string();
-                self.status_err = true;
+        // Automatic sync: every 5 s, backing off to 30 s after an error.
+        if self.sync_state != SyncState::Off && !busy {
+            let every = if matches!(self.sync_state, SyncState::Error(_)) { 30 } else { 5 };
+            let every = Duration::from_secs(every);
+            if !self.doc.dirty && self.last_auto_sync.elapsed() >= every {
+                self.last_auto_sync = Instant::now();
+                if let Err(e) = self.sync(ctx) {
+                    self.fail(e);
+                }
+            } else {
+                ctx.request_repaint_after(every.saturating_sub(self.last_auto_sync.elapsed()).max(Duration::from_millis(50)));
             }
         }
-        if self.sync_ok && self.pending.is_none() {
-            let until_sync = Duration::from_secs(5).saturating_sub(self.last_auto_sync.elapsed());
-            ctx.request_repaint_after(until_sync.max(Duration::from_millis(1)));
+        // Remember the session whenever it changes.
+        let s = self.session();
+        if s != self.saved_session {
+            save_json(session_file(&self.vault.root), &s);
+            self.saved_session = s;
         }
-        let backlinks: Vec<String> = if self.doc.name.is_empty() {
-            Vec::new()
-        } else {
-            self.notes
-                .iter()
-                .filter(|(n, t)| **n != self.doc.name && links(t).any(|p| p == self.doc.name))
-                .map(|(n, _)| n.clone())
-                .collect()
-        };
-        let mut open = None;
-        let mut del: Option<String> = None;
-        let mut result = Ok(());
-        let (k_new, k_find, k_graph, k_close) = ctx.input_mut(|i| {
+        let mut result: Result<()> = Ok(());
+        let mut act: Option<Act> = None;
+        let mut want_new: Option<String> = None;
+
+        // ---------------- shortcuts
+        let (k_new, k_find, k_graph, k_close, k_pal, k_save) = ctx.input_mut(|i| {
             (
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::N),
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::O)
-                    || i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::F),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::O) || i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::F),
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::G),
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::W),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::P) || i.consume_key(egui::Modifiers::COMMAND, egui::Key::K),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::S),
             )
         });
         let (zin, zout, zreset) = ctx.input_mut(|i| {
@@ -720,763 +1281,669 @@ impl eframe::App for Notebook {
             let z = if zreset { 1. } else if zin { ctx.zoom_factor() + 0.1 } else { ctx.zoom_factor() - 0.1 };
             ctx.set_zoom_factor(z.clamp(0.7, 2.0));
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::P)) {
+        if k_pal {
             self.palette = !self.palette;
             self.pal_query.clear();
+            self.pal_sel = 0;
         }
-        if !busy {
-            if k_new {
-                open = Some(self.fresh())
-            }
-            if k_find {
-                self.sidebar = true;
-                self.searching = true;
-                self.focus_search = true
-            }
-            if k_graph {
-                self.view = if self.view == View::Graph { View::Edit } else { View::Graph }
-            }
-            if k_close && !self.doc.name.is_empty() {
-                let tab = self.doc.name.clone();
-                self.tabs.retain(|t| t != &tab);
-                open = self.tabs.last().cloned();
-                if open.is_none() {
-                    result = self.save();
-                    self.doc = Document::default();
-                }
-            }
+        if k_new {
+            want_new = Some(String::new());
         }
-        egui::SidePanel::left("ribbon")
+        if k_find {
+            self.sidebar = true;
+            self.focus_search = true
+        }
+        if k_graph {
+            self.view = if self.view == View::Graph { View::Edit } else { View::Graph }
+        }
+        if k_save {
+            result = self.save()
+        }
+        if k_close && !self.doc.name.is_empty() {
+            let tab = self.doc.name.clone();
+            result = self.close_tab(&tab);
+        }
+
+        // ---------------- ribbon
+        let ribbon = egui::SidePanel::left("ribbon")
             .exact_width(44.)
             .resizable(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(SIDE)
-                    .stroke(egui::Stroke::new(1., LINE))
-                    .inner_margin(egui::Margin::symmetric(6, 8)),
-            )
+            .frame(egui::Frame::new().fill(p.side).stroke(egui::Stroke::new(1.0_f32, p.line)).inner_margin(egui::Margin::symmetric(6, 8)))
             .show(ctx, |ui| {
-                ui.add_enabled_ui(!busy, |ui| {
-                    ui.spacing_mut().item_spacing.y = 4.;
-                    if ib(ui, "side", "Toggle sidebar", false).clicked() {
-                        self.sidebar = !self.sidebar
-                    }
-                    let graph = self.view == View::Graph;
-                    if ib(ui, "files", "Files", self.sidebar && !self.searching && !graph).clicked() {
+                ui.spacing_mut().item_spacing.y = 4.;
+                let graph = self.view == View::Graph;
+                if ib(ui, "files", "Files (click again to hide)", self.sidebar && self.query.is_empty() && !graph).clicked() {
+                    if self.sidebar && self.query.is_empty() && !graph {
+                        self.sidebar = false;
+                    } else {
                         self.sidebar = true;
-                        self.searching = false;
+                        self.query.clear();
+                        if graph {
+                            self.view = View::Edit;
+                        }
+                    }
+                }
+                if ib(ui, "search", "Search notes (Ctrl+O)", self.sidebar && !self.query.is_empty() && !graph).clicked() {
+                    self.sidebar = true;
+                    self.focus_search = true;
+                    if graph {
                         self.view = View::Edit;
                     }
-                    if ib(ui, "search", "Search (Ctrl+O)", self.sidebar && self.searching && !graph).clicked() {
-                        self.sidebar = true;
-                        self.searching = true;
-                        self.focus_search = true;
-                        self.view = View::Edit;
+                }
+                if ib(ui, "graph", "Graph view (Ctrl+G)", graph).clicked() {
+                    self.view = if graph { View::Edit } else { View::Graph };
+                }
+                if ib(ui, "today", "Today's daily note", false).clicked() {
+                    act = Some(Act::Open(format!("Daily/{}.md", chrono::Local::now().date_naive())));
+                }
+                if ib(ui, "pal", "Command palette (Ctrl+P / Ctrl+K)", self.palette).clicked() {
+                    self.palette = !self.palette;
+                    self.pal_query.clear();
+                    self.pal_sel = 0;
+                }
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                    if ib(ui, "set", "Settings", self.settings.is_some()).clicked() {
+                        self.settings = if self.settings.is_some() { None } else { Some(Section::Sync) };
                     }
-                    if ib(ui, "graph", "Open graph view", self.view == View::Graph).clicked() {
-                        self.view = View::Graph
-                    }
-                    if ib(ui, "today", "Open today's daily note", false).clicked() {
-                        open = Some(format!("Daily/{}.md", chrono::Local::now().date_naive()))
-                    }
-                    if ib(ui, "pal", "Command palette (Ctrl+P)", self.palette).clicked() {
-                        self.palette = !self.palette
-                    }
-                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                        if ib(ui, "set", "Sync settings", self.settings).clicked() {
-                            self.settings = true
+                    let tip = match &self.sync_state {
+                        SyncState::Off => "Set up sync".to_owned(),
+                        SyncState::Syncing => "Syncing…".to_owned(),
+                        SyncState::Idle => "Sync now".to_owned(),
+                        SyncState::Error(e) => format!("Sync error: {e}"),
+                    };
+                    if ib(ui, "sync", &tip, busy).clicked() {
+                        if self.sync_state == SyncState::Off {
+                            self.settings = Some(Section::Sync);
+                        } else if let Err(e) = self.sync(ctx) {
+                            self.fail(e);
                         }
-                        if ib(ui, "sync", "Sync", false).clicked() {
-                            result = self.sync(ctx)
-                        }
-                    });
+                    }
                 });
             });
+        self.tour_rects[0] = Some(ribbon.response.rect);
+
+        // ---------------- sidebar
+        self.tour_rects[1] = None;
         if self.sidebar {
-            egui::SidePanel::left("vault")
-                .default_width(260.)
+            let side = egui::SidePanel::left("vault")
+                .default_width(250.)
                 .width_range(180.0..=480.)
-                .frame(
-                    egui::Frame::new()
-                        .fill(SIDE)
-                        .stroke(egui::Stroke::new(1., LINE))
-                        .inner_margin(egui::Margin::symmetric(8, 6)),
-                )
+                .frame(egui::Frame::new().fill(p.side).stroke(egui::Stroke::new(1.0_f32, p.line)).inner_margin(egui::Margin::symmetric(8, 8)))
                 .show(ctx, |ui| {
-                    ui.add_enabled_ui(!busy, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.add_space((ui.available_width() - 4. * 32.) / 2.);
-                            if ib(ui, "new", "New note", false).clicked() {
-                                open = Some(self.fresh())
+                    // Long names are truncated so the panel never resizes itself.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                    // Floating scroll bars overlay the list instead of adding width to it.
+                    ui.spacing_mut().scroll = egui::style::ScrollStyle::floating();
+                    // Search, always visible.
+                    // Laid out right to left so the clear button takes its space first and
+                    // the field fills the rest; sizing the field from a guessed button
+                    // width made the panel grow a little every frame.
+                    ui.horizontal(|ui| ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !self.query.is_empty() && ui.add(egui::Button::new(muted("×")).frame(false)).on_hover_text("Clear search").clicked() {
+                            self.query.clear();
+                        }
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut self.query)
+                                .id(egui::Id::new("search"))
+                                .hint_text(muted("Search notes   Ctrl+O"))
+                                .margin(egui::Margin::symmetric(8, 5))
+                                .desired_width(ui.available_width()),
+                        );
+                        if std::mem::take(&mut self.focus_search) {
+                            r.request_focus()
+                        }
+                        if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            self.query.clear();
+                            self.focus_editor = true;
+                        } else if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            let q = self.query.to_lowercase();
+                            if let Some(n) = self.notes.iter().find(|(n, t)| !q.is_empty() && (n.to_lowercase().contains(&q) || t.to_lowercase().contains(&q))) {
+                                act = Some(Act::Open(n.0.clone()))
                             }
-                            if ib(ui, "folder", "New folder note", false).clicked() {
-                                self.new_name = "Folder/".into()
+                        }
+                    }));
+                    ui.add_space(6.);
+                    ui.horizontal(|ui| {
+                        if primary(ui, "+ New note").on_hover_text("Ctrl+N").clicked() {
+                            want_new = Some(String::new());
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ib(ui, "collapse", "Collapse all folders", false).clicked() {
+                                self.collapse = true
                             }
-                            if ib(ui, "sort", "Change sort order", false).clicked() {
+                            if ib(ui, "sort", if self.sort_desc { "Sorted Z–A (click for A–Z)" } else { "Sorted A–Z (click for Z–A)" }, self.sort_desc).clicked() {
                                 self.sort_desc = !self.sort_desc
                             }
-                            if ib(ui, "collapse", "Collapse all", false).clicked() {
-                                self.collapse = Some(true)
-                            }
-                        });
-                        if self.searching || !self.query.is_empty() {
-                            let r = ui.add(
-                                egui::TextEdit::singleline(&mut self.query)
-                                    .hint_text("Search...")
-                                    .margin(egui::Margin::symmetric(9, 5))
-                                    .desired_width(f32::INFINITY),
-                            );
-                            if std::mem::take(&mut self.focus_search) {
-                                r.request_focus()
-                            }
-                            if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                self.query.clear();
-                                self.searching = false;
-                                self.focus_editor = true;
-                            } else if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                let q = self.query.to_lowercase();
-                                if let Some(n) = self.notes.iter().find(|(n, t)| {
-                                    !q.is_empty() && (n.to_lowercase().contains(&q) || t.to_lowercase().contains(&q))
-                                }) {
-                                    open = Some(n.0.clone())
-                                }
-                            }
-                        }
-                        if !self.new_name.is_empty() {
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.new_name)
-                                        .hint_text("Folder/Note name")
-                                        .desired_width(150.),
-                                );
-                                if ui.button("Create").clicked()
-                                    && !self.new_name.trim().ends_with('/')
-                                {
-                                    open = Some(note_name(&self.new_name));
-                                    self.new_name.clear()
-                                }
-                            });
-                        }
-                        ui.add_space(4.);
-                        let collapse_now = self.collapse.take().unwrap_or(false);
-                        let q = self.query.to_lowercase();
-                        let mut tree = Tree::default();
-                        for (n, t) in &self.notes {
-                            if q.is_empty()
-                                || n.to_lowercase().contains(&q)
-                                || t.to_lowercase().contains(&q)
-                            {
-                                tree.add(n, n);
-                            }
-                        }
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            if q.is_empty() {
-                                tree.show(ui, &self.doc.name, &mut open, &mut del, false, self.sort_desc, collapse_now);
-                                return;
-                            }
-                            for (n, t) in &self.notes {
-                                let title_hit = n.to_lowercase().contains(&q);
-                                let line = t.lines().find(|l| l.to_lowercase().contains(&q));
-                                if !title_hit && line.is_none() {
-                                    continue;
-                                }
-                                let r = ui.selectable_label(*n == self.doc.name, egui::RichText::new(n.trim_end_matches(".md")).strong().color(TEXT));
-                                if r.clicked() {
-                                    open = Some(n.clone())
-                                }
-                                if let Some(l) = line {
-                                    let l = l.trim();
-                                    let low = l.to_lowercase();
-                                    let at = low.find(&q).unwrap_or(0);
-                                    let start = l.char_indices().map(|c| c.0).filter(|i| *i + 20 >= at).next().unwrap_or(0);
-                                    let start = (0..=start).rev().find(|i| l.is_char_boundary(*i)).unwrap_or(0);
-                                    let mut job = egui::text::LayoutJob::default();
-                                    let fmt = egui::TextFormat { font_id: egui::FontId::proportional(12.), color: MUTED, ..Default::default() };
-                                    let hl = egui::TextFormat { color: ACCENT, ..fmt.clone() };
-                                    let seg = &l[start..];
-                                    let low = seg.to_lowercase();
-                                    if low.len() == seg.len() {
-                                        if let Some(p) = low.find(&q) {
-                                            let end = p + q.len();
-                                            job.append(&seg[..p], 12., fmt.clone());
-                                            job.append(&seg[p..end], 0., hl);
-                                            job.append(&seg[end..], 0., fmt);
-                                        } else {
-                                            job.append(seg, 12., fmt);
-                                        }
-                                    } else {
-                                        job.append(seg, 12., fmt);
-                                    }
-                                    job.wrap.max_rows = 1;
-                                    job.wrap.break_anywhere = true;
-                                    ui.label(job);
-                                }
-                                ui.add_space(4.);
+                            if ib(ui, "folder", "New folder", self.new_folder.is_some()).clicked() {
+                                self.new_folder = Some(String::new());
+                                self.folder_err = None;
                             }
                         });
                     });
-                });
-        }
-        if !backlinks.is_empty() {
-            egui::SidePanel::right("backlinks")
-                .default_width(220.)
-                .frame(egui::Frame::new().fill(SIDE).inner_margin(10.))
-                .show(ctx, |ui| {
-                    ui.label(egui::RichText::new("BACKLINKS").small().strong().color(MUTED));
-                    for n in &backlinks {
-                        if ui.link(n.trim_end_matches(".md")).clicked() {
-                            open = Some(n.clone())
+                    if let Some(mut name) = self.new_folder.take() {
+                        let mut keep = true;
+                        ui.add_space(4.);
+                        ui.label(muted("New folder name"));
+                        ui.horizontal(|ui| ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let create = ui.button("Create").clicked();
+                            let r = ui.add(egui::TextEdit::singleline(&mut name).id(egui::Id::new("new-folder")).hint_text(muted("e.g. Recipes")).desired_width(ui.available_width()));
+                            if name.is_empty() && !r.has_focus() && self.folder_err.is_none() {
+                                r.request_focus();
+                            }
+                            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                keep = false;
+                            }
+                            if create || enter {
+                                let n = name.trim().trim_matches('/');
+                                if n.is_empty() {
+                                    self.folder_err = Some("Type a folder name first.".into());
+                                } else {
+                                    // Folders exist through their notes: create one inside and name it.
+                                    want_new = Some(format!("{n}/"));
+                                    keep = false;
+                                }
+                            }
+                        }));
+                        if let Some(e) = &self.folder_err {
+                            ui.label(egui::RichText::new(e).color(p.red).small());
+                        }
+                        if ui.small_button("Cancel").clicked() {
+                            keep = false;
+                        }
+                        if keep {
+                            self.new_folder = Some(name);
                         }
                     }
-                });
-        }
-        egui::TopBottomPanel::bottom("status")
-            .frame(egui::Frame::new().fill(RIBBON).inner_margin(egui::Margin::symmetric(10, 3)))
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(self.vault.root.file_name().map_or(String::new(), |n| n.to_string_lossy().into()))
-                            .family(egui::FontFamily::Name("bold".into()))
-                            .size(13.),
-                    );
-                    ui.label(egui::RichText::new(format!("· {} notes", self.notes.len())).size(13.).color(MUTED));
-                    let c = if self.status_err { Color32::from_rgb(0xe5, 0x53, 0x4b) } else { MUTED };
-                    ui.label(egui::RichText::new(format!("· {}", self.status)).size(13.).color(c));
-                    if self.undo.is_some() && ui.link("Undo").clicked() {
-                        if let Some((name, from)) = self.undo.take() {
-                            let r = target(&self.vault.root, &name).and_then(|to| {
-                                if let Some(p) = to.parent() {
-                                    fs::create_dir_all(p)?
+                    ui.add_space(4.);
+                    let collapse_now = std::mem::take(&mut self.collapse);
+                    let q = self.query.to_lowercase();
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        if q.is_empty() {
+                            let mut tree = Tree::default();
+                            for n in self.notes.keys() {
+                                tree.add(n, n);
+                            }
+                            if !self.doc.name.is_empty() && !self.notes.contains_key(&self.doc.name) {
+                                tree.add(&self.doc.name, &self.doc.name);
+                            }
+                            if self.notes.is_empty() && self.doc.name.is_empty() {
+                                ui.add_space(12.);
+                                ui.label(muted("No notes yet."));
+                                ui.label(muted("Press + New note to write your first one."));
+                            }
+                            tree.show(ui, "", &self.doc.name, &mut act, self.sort_desc, collapse_now);
+                            return;
+                        }
+                        let mut hits = 0;
+                        for (n, t) in &self.notes {
+                            let title_hit = n.to_lowercase().contains(&q);
+                            let line = t.lines().find(|l| l.to_lowercase().contains(&q));
+                            if !title_hit && line.is_none() {
+                                continue;
+                            }
+                            hits += 1;
+                            let r = ui.selectable_label(*n == self.doc.name, egui::RichText::new(leaf(n)).strong().color(p.text));
+                            let r = r.on_hover_text(stem(n));
+                            if r.clicked() {
+                                act = Some(Act::Open(n.clone()))
+                            }
+                            let folder = folder_of(n);
+                            if !folder.is_empty() {
+                                ui.label(egui::RichText::new(folder.trim_end_matches('/')).small().color(p.muted));
+                            }
+                            if let Some(l) = line {
+                                let l = l.trim();
+                                let low = l.to_lowercase();
+                                let mut job = egui::text::LayoutJob::default();
+                                let fmt = egui::TextFormat { font_id: egui::FontId::proportional(12.), color: p.muted, ..Default::default() };
+                                let hl = egui::TextFormat { color: p.accent, ..fmt.clone() };
+                                // Start the snippet at a word boundary a little before the hit.
+                                let at = low.find(&q).unwrap_or(0);
+                                let start = if low.len() == l.len() && at > 24 {
+                                    let from = (0..=at - 24).rev().find(|i| l.is_char_boundary(*i)).unwrap_or(0);
+                                    l[from..at].find(' ').map(|s| from + s + 1).unwrap_or(from)
+                                } else {
+                                    0
+                                };
+                                let seg = &l[start..];
+                                let lowseg = seg.to_lowercase();
+                                let lead = if start > 0 { "…" } else { "" };
+                                match lowseg.find(&q).filter(|_| lowseg.len() == seg.len()) {
+                                    Some(i) => {
+                                        let end = i + q.len();
+                                        job.append(&format!("{lead}{}", &seg[..i]), 0., fmt.clone());
+                                        job.append(&seg[i..end], 0., hl);
+                                        job.append(&seg[end..], 0., fmt);
+                                    }
+                                    None => job.append(&format!("{lead}{seg}"), 0., fmt),
                                 }
-                                ensure!(!to.exists(), "A note with that name exists");
-                                Ok(fs::rename(from, to)?)
-                            });
-                            match r {
-                                Ok(()) => {
-                                    result = self.refresh();
-                                    open = Some(name);
-                                }
-                                Err(e) => result = Err(e),
+                                // Indent with real space: a leading_space on the job is not
+                                // counted by truncation and widened the panel every frame.
+                                ui.horizontal(|ui| {
+                                    ui.add_space(8.);
+                                    ui.label(job);
+                                });
+                            }
+                            ui.add_space(5.);
+                        }
+                        if hits == 0 {
+                            ui.add_space(8.);
+                            ui.label(muted(format!("Nothing matches \"{}\".", self.query)));
+                            if ui.button(format!("Create note \"{}\"", self.query.trim())).clicked() {
+                                act = Some(Act::Open(note_name(self.query.trim())));
+                                self.query.clear();
                             }
                         }
+                    });
+                });
+            self.tour_rects[1] = Some(side.response.rect);
+        }
+
+        // ---------------- linked-from panel
+        let backlinks = if self.doc.name.is_empty() { Vec::new() } else { self.backlinks_of(&self.doc.name) };
+        if !self.doc.name.is_empty() && !self.hide_links && self.view != View::Graph {
+            egui::SidePanel::right("backlinks")
+                .default_width(210.)
+                .width_range(160.0..=360.)
+                .frame(egui::Frame::new().fill(p.side).inner_margin(10.))
+                .show(ctx, |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Linked from ({})", backlinks.len())).strong().color(p.muted));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(egui::Button::new(muted("×")).frame(false)).on_hover_text("Hide this panel").clicked() {
+                                self.hide_links = true;
+                            }
+                        });
+                    });
+                    ui.add_space(4.);
+                    if backlinks.is_empty() {
+                        ui.label(muted("No other notes link here yet."));
+                        ui.label(egui::RichText::new(format!("Type [[{}]] in another note to link it.", leaf(&self.doc.name))).small().color(p.muted));
+                    }
+                    for n in &backlinks {
+                        ui.horizontal(|ui| {
+                            if ui.link(leaf(n)).on_hover_text(stem(n)).clicked() {
+                                act = Some(Act::Open(n.clone()))
+                            }
+                            let f = folder_of(n);
+                            if !f.is_empty() {
+                                ui.label(egui::RichText::new(f.trim_end_matches('/')).small().color(p.muted));
+                            }
+                        });
                     }
                 });
-            });
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(24, 10)))
+        }
+
+        // ---------------- status bar
+        let status_bar = egui::TopBottomPanel::bottom("status")
+            .frame(egui::Frame::new().fill(p.ribbon).inner_margin(egui::Margin::symmetric(10, 3)))
             .show(ctx, |ui| {
-                ui.add_enabled_ui(self.pending.is_none(), |ui| {
-                    if self.view == View::Graph {
-                        ui.horizontal(|ui| {
-                            ui.heading("Note graph");
-                            if ui.button("Back to editor").clicked() {
+                ui.horizontal(|ui| {
+                    let vname = self.vault.root.file_name().map_or(String::new(), |n| n.to_string_lossy().into());
+                    let vaults: Vec<PathBuf> = self.prefs.recent.iter().skip(1).cloned().collect();
+                    ui.menu_button(egui::RichText::new(format!("{vname} ⌄")).family(egui::FontFamily::Name("bold".into())).size(13.), |ui| {
+                        ui.label(muted(self.vault.root.display().to_string()));
+                        ui.separator();
+                        if ui.button("Open another vault…").clicked() {
+                            self.vault_win = Some(self.vault.root.display().to_string());
+                            ui.close_menu();
+                        }
+                        if !vaults.is_empty() {
+                            ui.label(muted("Recent vaults"));
+                            for v in &vaults {
+                                if ui.button(v.display().to_string()).clicked() {
+                                    self.vault_win = Some(v.display().to_string());
+                                    ui.close_menu();
+                                }
+                            }
+                            ui.separator();
+                        }
+                        if ui.button("Reveal vault folder").clicked() {
+                            reveal(&self.vault.root);
+                            ui.close_menu();
+                        }
+                        if ui.button("Trash…").clicked() {
+                            self.trash = true;
+                            ui.close_menu();
+                        }
+                    })
+                    .response
+                    .on_hover_text("Switch vault");
+                    ui.label(egui::RichText::new(plural(self.notes.len(), "note")).size(13.).color(p.muted));
+                    let fresh = self.status_err || self.status_at.elapsed() < Duration::from_secs(6);
+                    if !self.status.is_empty() && fresh {
+                        let c = if self.status_err { p.red } else { p.muted };
+                        ui.label(egui::RichText::new(format!("· {}", self.status)).size(13.).color(c));
+                        if !self.status_err {
+                            ctx.request_repaint_after(Duration::from_secs(6));
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let nconf = self.conflicts().len();
+                        let (txt, col, tip) = match &self.sync_state {
+                            SyncState::Off => ("Sync off".to_owned(), p.muted, "Click to set up sync".to_owned()),
+                            SyncState::Syncing => ("⟳ Syncing…".to_owned(), p.muted, "Syncing with the server".to_owned()),
+                            SyncState::Idle => {
+                                let txt = match self.last_sync {
+                                    Some(t) => format!("● Synced {}", ago(t)),
+                                    None => "● Sync on".to_owned(),
+                                };
+                                (txt, p.accent, "Click for sync details".to_owned())
+                            }
+                            SyncState::Error(e) => ("● Sync error".to_owned(), p.red, format!("{e}\nClick for details")),
+                        };
+                        let r = ui.add(egui::Button::new(egui::RichText::new(txt).size(12.5).color(col)).frame(false)).on_hover_text(tip);
+                        if r.clicked() {
+                            self.settings = Some(Section::Sync);
+                        }
+                        if nconf > 0 && ui.add(egui::Button::new(egui::RichText::new(format!("{} ·", plural(nconf, "conflict"))).size(12.5).color(p.amber)).frame(false)).on_hover_text("Review conflicting edits").clicked() {
+                            self.settings = Some(Section::Sync);
+                        }
+                        if self.sync_state == SyncState::Idle && self.last_sync.is_some() {
+                            ctx.request_repaint_after(Duration::from_secs(10));
+                        }
+                    });
+                });
+            });
+        self.tour_rects[3] = Some(status_bar.response.rect);
+
+        // ---------------- central
+        let central = egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::symmetric(24, 10)))
+            .show(ctx, |ui| {
+                if self.view == View::Graph {
+                    ui.horizontal(|ui| {
+                        ui.heading("Graph");
+                        ui.add(egui::TextEdit::singleline(&mut self.gfilter).hint_text(muted("Filter notes")).desired_width(160.));
+                        ui.add_enabled(!self.doc.name.is_empty(), egui::Checkbox::new(&mut self.glocal, "Only around current note"));
+                        ui.checkbox(&mut self.glabels, "Labels");
+                        if ui.button("Reset view").clicked() {
+                            self.gzoom = 1.;
+                            self.gpan = Vec2::ZERO;
+                            self.gpos.clear();
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Close graph").clicked() {
                                 self.view = View::Edit
                             }
                         });
-                        if let Some(n) = self.graph(ui) {
-                            open = Some(n)
-                        }
-                        return;
+                    });
+                    ui.label(muted("Click a note to open it. Drag to move, scroll to zoom."));
+                    if let Some(n) = self.graph(ui) {
+                        act = Some(Act::Open(n))
                     }
+                    return;
+                }
+                // Tabs scroll sideways instead of pushing the rest of the window.
+                let mut close: Option<String> = None;
+                egui::ScrollArea::horizontal().id_salt("tabs").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         for tab in self.tabs.clone() {
-                            let mut title = tab.rsplit('/').next().unwrap_or(&tab).trim_end_matches(".md").to_owned();
+                            let mut title = leaf(&tab).to_owned();
+                            if title.chars().count() > 22 {
+                                title = title.chars().take(21).collect::<String>() + "…";
+                            }
                             if self.doc.dirty && tab == self.doc.name {
                                 title.push_str(" ●")
                             }
                             let active = tab == self.doc.name;
                             egui::Frame::new()
-                                .fill(if active { SIDE } else { Color32::TRANSPARENT })
+                                .fill(if active { p.side } else { Color32::TRANSPARENT })
                                 .corner_radius(egui::CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 })
                                 .inner_margin(egui::Margin::symmetric(12, 5))
                                 .show(ui, |ui| {
                                     ui.spacing_mut().item_spacing.x = 8.;
-                                    let col = if active { TEXT } else { MUTED };
-                                    let l = ui.add(egui::Label::new(egui::RichText::new(title).color(col)).selectable(false).sense(egui::Sense::click()));
+                                    let l = ui.add(egui::Label::new(egui::RichText::new(title).color(if active { p.text } else { p.muted })).selectable(false).sense(egui::Sense::click()));
+                                    let l = l.on_hover_text(stem(&tab));
                                     if l.clicked() {
-                                        open = Some(tab.clone());
+                                        act = Some(Act::Open(tab.clone()));
                                     }
-                                    if ui.add(egui::Button::new(egui::RichText::new("×").color(MUTED)).frame(false)).clicked() {
-                                        self.tabs.retain(|t| t != &tab);
-                                        if active {
-                                            open = self.tabs.last().cloned();
-                                            if open.is_none() {
-                                                self.doc = Document::default();
-                                            }
-                                        }
+                                    if l.middle_clicked() {
+                                        close = Some(tab.clone());
+                                    }
+                                    if ui.add(egui::Button::new(muted("×")).frame(false)).on_hover_text("Close tab (Ctrl+W)").clicked() {
+                                        close = Some(tab.clone());
                                     }
                                 });
                         }
-                        if ui.add(egui::Button::new(egui::RichText::new("+").size(16.).color(MUTED)).frame(false)).clicked() {
-                            open = Some(self.fresh())
+                        if ui.add(egui::Button::new(egui::RichText::new("+").size(16.).color(p.muted)).frame(false)).on_hover_text("New note (Ctrl+N)").clicked() {
+                            want_new = Some(String::new());
                         }
                     });
-                    ui.separator();
-                    if self.doc.name.is_empty() {
-                        ui.add_space(ui.available_height() * 0.3);
-                        ui.vertical_centered(|ui| {
-                            let b = |ui: &mut egui::Ui, i: &str, t: &str, k: &str| {
-                                let img = egui::Image::new(svg(i)).tint(TEXT).fit_to_exact_size(Vec2::splat(16.));
-                                ui.add_sized(
-                                    [260., 34.],
-                                    egui::Button::image_and_text(img, t).shortcut_text(k).corner_radius(17.),
-                                )
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .clicked()
-                            };
-                            if b(ui, "new", "New note", "Ctrl+N") {
-                                open = Some(self.fresh())
-                            }
-                            if b(ui, "graph", "Open graph", "Ctrl+G") {
-                                self.view = View::Graph
-                            }
-                            if b(ui, "today", "Daily note", "") {
-                                open = Some(format!("Daily/{}.md", chrono::Local::now().date_naive()))
-                            }
-                            if b(ui, "search", "Go to file", "Ctrl+O") {
-                                self.sidebar = true;
-                                self.searching = true;
-                                self.focus_search = true
-                            }
-                        });
-                        return;
-                    }
-                    if !self.sync_ok && !self.banner_off {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Sync is not set up.").color(MUTED));
-                            if ui.link("Connect my other computer").clicked() {
-                                self.settings = true
-                            }
-                            if ui.add(egui::Button::new(egui::RichText::new("×").color(MUTED)).frame(false)).on_hover_text("Hide").clicked() {
-                                self.banner_off = true;
-                                let _ = fs::write(banner_flag(&self.vault.root), "");
-                            }
-                        });
-                    }
-                    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
-                        result = self.save()
-                    }
-                    let stem = self.doc.name.trim_end_matches(".md").to_owned();
-                    let t = ui.add(
-                        egui::TextEdit::singleline(&mut self.title)
-                            .font(egui::FontId::new(26., egui::FontFamily::Name("bold".into())))
-                            .frame(false)
-                            .desired_width(f32::INFINITY),
-                    );
-                    if std::mem::take(&mut self.focus_title) {
-                        t.request_focus()
-                    }
-                    if t.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                        self.title = stem.clone();
-                        ui.memory_mut(|m| m.surrender_focus(t.id));
-                    } else if t.lost_focus() && self.title.trim() != stem && !self.title.trim().is_empty() {
-                        let to = self.title.trim().to_owned();
-                        result = self.rename_to(to);
-                        self.title = self.doc.name.trim_end_matches(".md").to_owned();
-                    }
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(&mut self.view, View::Edit, "Edit");
-                        ui.selectable_value(&mut self.view, View::Preview, "Preview");
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.menu_button("…", |ui| {
-                                if ui.button("Save").clicked() {
-                                    result = self.save();
-                                    ui.close_menu();
-                                }
-                                if ui.button("Rename").clicked() {
-                                    self.focus_title = true;
-                                    ui.close_menu();
-                                }
-                                if ui
-                                    .button("Reload from disk")
-                                    .on_hover_text("Discard this editor buffer and read the file again")
-                                    .clicked()
-                                {
-                                    result = self.load(self.doc.name.clone());
-                                    ui.close_menu();
-                                }
-                                ui.separator();
-                                if ui.button(egui::RichText::new("Delete…").color(Color32::from_rgb(0xe5, 0x53, 0x4b))).clicked() {
-                                    self.confirm_delete = true;
-                                    ui.close_menu();
-                                }
-                            });
-                        });
-                    });
-                    if self.confirm_delete {
-                        ui.horizontal(|ui| {
-                            ui.label("Delete this note?");
-                            if ui.button("Delete").clicked() {
-                                result = (|| {
-                                    let path = self.checked_path()?;
-                                    if path.exists() {
-                                        let dir = self.vault.root.join(".trash");
-                                        fs::create_dir_all(&dir)?;
-                                        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-                                        let flat = self.doc.name.replace('/', "__");
-                                        let dest = dir.join(format!("{stamp}-{flat}"));
-                                        fs::rename(&path, &dest)?;
-                                        self.undo = Some((self.doc.name.clone(), dest));
-                                        self.status = "Moved to .trash".into();
-                                    }
-                                    self.notes.remove(&self.doc.name);
-                                    self.tabs.retain(|t| t != &self.doc.name);
-                                    self.doc = Document::default();
-                                    self.confirm_delete = false;
-                                    Ok(())
-                                })()
-                            }
-                            if ui.button("Cancel").clicked() {
-                                self.confirm_delete = false
-                            }
-                        });
-                        if self.doc.name.is_empty() {
-                            return;
-                        }
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        for n in links(&self.doc.text) {
-                            if ui.link(&n).clicked() {
-                                open = Some(n)
-                            }
-                        }
-                    });
-                    egui::ScrollArea::vertical()
-                        .id_salt("document")
-                        .show(ui, |ui| {
-                            if self.view == View::Edit {
-                                let eid = ui.make_persistent_id("doceditor");
-                                let matches: Vec<String> = match &self.pick {
-                                    Some((_, _, q)) => {
-                                        let q = q.to_lowercase();
-                                        self.notes
-                                            .keys()
-                                            .filter(|n| n.to_lowercase().contains(&q))
-                                            .take(6)
-                                            .cloned()
-                                            .collect()
-                                    }
-                                    None => Vec::new(),
-                                };
-                                let mut insert: Option<String> = None;
-                                if self.pick.is_some() && !matches.is_empty() {
-                                    let take = ui.input_mut(|i| {
-                                        i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
-                                            || i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)
-                                    });
-                                    if take {
-                                        insert = Some(matches[0].clone())
-                                    }
-                                }
-                                let r = ui.add(
-                                    egui::TextEdit::multiline(&mut self.doc.text)
-                                        .id(eid)
-                                        .frame(false)
-                                        .hint_text("Start typing… type [[ to link a note")
-                                        .desired_width(f32::INFINITY)
-                                        .desired_rows(26),
-                                );
-                                let mut cursor = None;
-                                if let Some(st) = egui::TextEdit::load_state(ui.ctx(), eid) {
-                                    cursor = st.cursor.char_range().map(|c| c.primary.index);
-                                }
-                                let before_pick = self.pick.clone();
-                                if r.has_focus() {
-                                    self.pick = cursor.and_then(|c| pick_at(&self.doc.text, c));
-                                } else if insert.is_none() {
-                                    self.pick = None
-                                }
-                                if self.pick != before_pick {
-                                    ui.ctx().request_repaint();
-                                }
-                                let matches: Vec<String> = match &self.pick {
-                                    Some((_, _, q)) => {
-                                        let q = q.to_lowercase();
-                                        self.notes.keys().filter(|n| n.to_lowercase().contains(&q)).take(6).cloned().collect()
-                                    }
-                                    None => Vec::new(),
-                                };
-                                if let (Some((s, c, _)), false) = (self.pick.clone(), matches.is_empty()) {
-                                    egui::Area::new(egui::Id::new("pickpop"))
-                                        .order(egui::Order::Foreground)
-                                        .fixed_pos(r.rect.left_top() + Vec2::new(24., 40.))
-                                        .show(ui.ctx(), |ui| {
-                                            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                                                ui.set_min_width(240.);
-                                                for m in &matches {
-                                                    if ui.selectable_label(false, m.trim_end_matches(".md")).clicked() {
-                                                        insert = Some(m.clone())
-                                                    }
-                                                }
-                                            });
-                                        });
-                                    if let Some(m) = insert.take() {
-                                        let stem = m.trim_end_matches(".md");
-                                        let chars: Vec<char> = self.doc.text.chars().collect();
-                                        let mut out: String = chars[..s].iter().collect();
-                                        out.push_str(stem);
-                                        out.push_str("]]");
-                                        let end = out.chars().count();
-                                        out.extend(chars[c.min(chars.len())..].iter());
-                                        self.doc.text = out;
-                                        if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), eid) {
-                                            st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(end))));
-                                            st.store(ui.ctx(), eid);
-                                        }
-                                        self.pick = None;
-                                        self.doc.dirty = true;
-                                        self.last_edit = Some(Instant::now());
-                                        r.request_focus();
-                                    }
-                                }
-                                if std::mem::take(&mut self.focus_editor) {
-                                    r.request_focus()
-                                }
-                                if r.changed() {
-                                    self.doc.dirty = true;
-                                    self.last_edit = Some(Instant::now());
-                                    self.status = "Unsaved changes".into();
-                                    self.status_err = false;
-                                }
-                            } else {
-                                CommonMarkViewer::new().show(ui, &mut self.cache, &self.doc.text);
-                            }
-                        });
                 });
-            });
-        if let Some(n) = del.take() {
-            match self.open(n) {
-                Ok(()) => self.confirm_delete = true,
-                Err(e) => result = Err(e),
-            }
-        }
-        if let Some(n) = open.take() {
-            result = self.open(n)
-        }
-        if self.palette {
-            let mut cmds: Vec<(String, &str, &str)> = vec![
-                ("New note".into(), "Ctrl+N", "new"),
-                ("Open graph view".into(), "Ctrl+G", "graph"),
-                ("Open today's daily note".into(), "", "daily"),
-                ("Search notes".into(), "Ctrl+O", "search"),
-                ("Toggle sidebar".into(), "", "side"),
-                ("Sync now".into(), "", "sync"),
-                ("Sync settings".into(), "", "settings"),
-                ("Show log".into(), "", "log"),
-                ("Open another vault…".into(), "", "vault"),
-                ("Show tour".into(), "", "tour"),
-            ];
-            if !self.doc.name.is_empty() {
-                cmds.push(("Rename current note".into(), "", "rename"));
-                cmds.push(("Delete current note".into(), "", "delete"));
-                cmds.push(("Toggle preview".into(), "", "preview"));
-            }
-            let q = self.pal_query.to_lowercase();
-            let mut shown: Vec<(String, &str, String)> = cmds
-                .into_iter()
-                .filter(|(l, _, _)| l.to_lowercase().contains(&q))
-                .map(|(l, k, id)| (l, k, id.to_owned()))
-                .collect();
-            if !q.is_empty() {
-                for n in self.notes.keys().filter(|n| n.to_lowercase().contains(&q)).take(8) {
-                    shown.push((format!("Open {}", n.trim_end_matches(".md")), "", format!("note:{n}")));
+                if let Some(t) = close {
+                    result = self.close_tab(&t);
                 }
-            }
-            let mut chosen: Option<String> = None;
-            let mut keep = true;
-            egui::Window::new("palette")
-                .title_bar(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_TOP, [0., 80.])
-                .fixed_size([460., 0.])
-                .show(ctx, |ui| {
-                    let r = ui.add(
-                        egui::TextEdit::singleline(&mut self.pal_query)
-                            .hint_text("Type a command or note name...")
-                            .desired_width(f32::INFINITY),
-                    );
-                    r.request_focus();
-                    ui.separator();
-                    for (i, (label, key, id)) in shown.iter().enumerate() {
-                        let b = ui.add_sized(
-                            [ui.available_width(), 26.],
-                            egui::Button::new(label.as_str()).shortcut_text(*key).frame(i == 0),
-                        );
-                        if b.clicked() {
-                            chosen = Some(id.clone())
+                ui.separator();
+                if self.doc.name.is_empty() {
+                    ui.add_space(ui.available_height() * 0.28);
+                    ui.vertical_centered(|ui| {
+                        ui.label(muted(if self.notes.is_empty() { "Welcome to Emerald. Start with a note." } else { "No note open." }));
+                        ui.add_space(8.);
+                        let b = |ui: &mut egui::Ui, i: &str, t: &str, k: &str| {
+                            let img = egui::Image::new(svg(i)).tint(pal().text).fit_to_exact_size(Vec2::splat(16.));
+                            ui.add_sized([260., 34.], egui::Button::image_and_text(img, t).shortcut_text(k).corner_radius(17.)).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+                        };
+                        if b(ui, "new", "New note", "Ctrl+N") {
+                            want_new = Some(String::new());
+                        }
+                        if b(ui, "search", "Search notes", "Ctrl+O") {
+                            self.sidebar = true;
+                            self.focus_search = true
+                        }
+                        if b(ui, "today", "Today's daily note", "") {
+                            act = Some(Act::Open(format!("Daily/{}.md", chrono::Local::now().date_naive())))
+                        }
+                        if b(ui, "graph", "Graph view", "Ctrl+G") {
+                            self.view = View::Graph
+                        }
+                    });
+                    return;
+                }
+                if self.sync_state == SyncState::Off && !self.banner_off {
+                    ui.horizontal(|ui| {
+                        ui.label(muted("Want these notes on another device?"));
+                        if ui.link("Set up sync").clicked() {
+                            self.settings = Some(Section::Sync)
+                        }
+                        if ui.add(egui::Button::new(muted("×")).frame(false)).on_hover_text("Don't show again").clicked() {
+                            self.banner_off = true;
+                            let _ = fs::write(banner_flag(&self.vault.root), "");
+                        }
+                    });
+                }
+                // Title: the note's own name, with its folder as a breadcrumb.
+                let folder = folder_of(&self.doc.name).to_owned();
+                if !folder.is_empty() {
+                    ui.label(muted(folder.trim_end_matches('/').replace('/', " › ") + " ›"));
+                }
+                let current = leaf(&self.doc.name).to_owned();
+                let hovering = ui.rect_contains_pointer(Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), 40.)));
+                let editing = ui.memory(|m| m.has_focus(egui::Id::new("title")));
+                let frame = egui::Frame::new()
+                    .stroke(egui::Stroke::new(1.0_f32, if hovering || editing { p.line } else { Color32::TRANSPARENT }))
+                    .corner_radius(6)
+                    .inner_margin(egui::Margin::symmetric(4, 0));
+                let t = frame
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let hint = if editing { "Enter to rename" } else if hovering && !self.busy() { "click to rename" } else { "" };
+                                ui.add_sized([110., 20.], egui::Label::new(muted(hint)));
+                                egui::TextEdit::singleline(&mut self.title)
+                                    .id(egui::Id::new("title"))
+                                    .font(egui::FontId::new(26., egui::FontFamily::Name("bold".into())))
+                                    .frame(false)
+                                    .desired_width(ui.available_width())
+                                    .show(ui)
+                            })
+                            .inner
+                        })
+                        .inner
+                    })
+                    .inner;
+                self.tour_rects[2] = Some(t.response.rect.expand(4.));
+                let t_resp = t.response.clone().on_hover_text("Click to rename this note");
+                if std::mem::take(&mut self.focus_title) {
+                    t_resp.request_focus();
+                }
+                if std::mem::take(&mut self.select_title) {
+                    let mut st = t.state.clone();
+                    st.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(self.title.chars().count()))));
+                    st.store(ui.ctx(), t_resp.id);
+                }
+                if t_resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    self.title = current.clone();
+                    ui.memory_mut(|m| m.surrender_focus(t_resp.id));
+                } else if t_resp.lost_focus() {
+                    let typed = self.title.trim().to_owned();
+                    if typed.is_empty() {
+                        self.title = current.clone();
+                    } else if typed != current {
+                        // A name with a slash is a full path; otherwise keep the folder.
+                        let to = if typed.contains('/') { typed } else { format!("{folder}{typed}") };
+                        if let Err(e) = self.rename_to(to) {
+                            result = Err(e);
+                            self.title = current.clone();
                         }
                     }
                     if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        chosen = shown.first().map(|s| s.2.clone())
+                        self.focus_editor = true;
                     }
-                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                        keep = false
-                    }
-                });
-            if let Some(id) = chosen {
-                keep = false;
-                match id.as_str() {
-                    "new" => open = Some(self.fresh()),
-                    "graph" => self.view = View::Graph,
-                    "daily" => open = Some(format!("Daily/{}.md", chrono::Local::now().date_naive())),
-                    "search" => {
-                        self.sidebar = true;
-                        self.searching = true;
-                        self.focus_search = true;
-                        self.view = View::Edit;
-                    }
-                    "side" => self.sidebar = !self.sidebar,
-                    "sync" => result = self.sync(ctx),
-                    "settings" => self.settings = true,
-                    "log" => self.show_log = true,
-                    "vault" => self.vault_win = Some(self.vault.root.display().to_string()),
-                    "tour" => self.tour = Some(0),
-                    "rename" => self.focus_title = true,
-                    "delete" => self.confirm_delete = true,
-                    "preview" => {
-                        self.view = if self.view == View::Preview { View::Edit } else { View::Preview }
-                    }
-                    n => {
-                        if let Some(n) = n.strip_prefix("note:") {
-                            open = Some(n.to_owned())
+                }
+                // Toolbar.
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.view, View::Edit, "Edit");
+                    ui.selectable_value(&mut self.view, View::Preview, "Preview");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.menu_button("•••", |ui| {
+                            if ui.button("Rename").clicked() {
+                                self.focus_title = true;
+                                self.select_title = true;
+                                ui.close_menu();
+                            }
+                            if ui.button("Move to folder…").clicked() {
+                                self.move_win = Some((self.doc.name.clone(), folder.trim_end_matches('/').to_owned()));
+                                ui.close_menu();
+                            }
+                            if ui.button("Duplicate").clicked() {
+                                act = Some(Act::Duplicate(self.doc.name.clone()));
+                                ui.close_menu();
+                            }
+                            if ui.button("Save now").on_hover_text("Notes also save a second after you stop typing").clicked() {
+                                result = self.save();
+                                ui.close_menu();
+                            }
+                            if ui.button("Reload from disk").on_hover_text("Discard this editor buffer and read the file again").clicked() {
+                                result = self.load(self.doc.name.clone());
+                                ui.close_menu();
+                            }
+                            if ui.button("Reveal in file manager").clicked() {
+                                act = Some(Act::Reveal(self.doc.name.clone()));
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button(egui::RichText::new("Delete…").color(p.red)).clicked() {
+                                self.confirm_delete = Some(self.doc.name.clone());
+                                ui.close_menu();
+                            }
+                        });
+                        if self.hide_links && ui.button(format!("Linked from {}", backlinks.len())).on_hover_text("Show the notes that link here").clicked() {
+                            self.hide_links = false;
                         }
-                    }
-                }
-                if open.is_some() {
-                    result = match open.take() {
-                        Some(n) => self.open(n),
-                        None => Ok(()),
-                    }
-                }
-            }
-            self.palette = keep;
-        }
-        if self.settings {
-            let mut win = true;
-            egui::Window::new("Sync settings").open(&mut win).show(ctx, |ui| {
-                ui.label("Keep your notes the same on two computers.");
-                ui.label(egui::RichText::new("1. On the other computer, start emerald-server and note its address and token.
-2. Paste them below and press Test.
-3. When it says Connected, press Connect.").color(MUTED));
-                ui.add_space(6.);
-                ui.label("Address of the other computer");
-                ui.add(egui::TextEdit::singleline(&mut self.server).hint_text("https://my-server:8080").desired_width(320.));
-                ui.label("Pairing token");
-                ui.add(egui::TextEdit::singleline(&mut self.secret).password(true));
-                if ui.button("Connect").clicked() {
-                    result = sync::configure(
-                        &self.vault,
-                        sync::Connection {
-                            server: self.server.clone(),
-                            token: self.secret.clone(),
-                        },
-                    );
-                    if result.is_ok() {
-                        self.secret.clear();
-                        self.settings = false;
-                        self.sync_ok = true;
-                        self.last_auto_sync = Instant::now();
-                        self.status = "Connection saved. Automatic sync checks every 5 seconds.".into()
-                    }
-                }
-                if ui.button("Test").clicked() {
-                    let (tx, rx) = mpsc::channel();
-                    let (s, t) = (self.server.clone(), self.secret.clone());
-                    let c = ctx.clone();
-                    self.test_msg = Some((true, "Testing…".into()));
-                    self.test_rx = Some(rx);
-                    std::thread::spawn(move || {
-                        let _ = tx.send(sync::test(&s, &t));
-                        c.request_repaint();
+                    });
+                });
+                // Outgoing links, by note name, once each.
+                let outgoing = unique_links(&self.doc.text);
+                if !outgoing.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(muted("Links:"));
+                        for n in outgoing {
+                            let exists = self.notes.contains_key(&n);
+                            let text = if exists { egui::RichText::new(leaf(&n)) } else { egui::RichText::new(format!("{} (new)", leaf(&n))).color(p.muted) };
+                            let tip = if exists { stem(&n).to_owned() } else { format!("{} doesn't exist yet. Click to create it.", stem(&n)) };
+                            if ui.link(text).on_hover_text(tip).clicked() {
+                                act = Some(Act::Open(n))
+                            }
+                        }
                     });
                 }
-                if let Some(rx) = &self.test_rx {
-                    if let Ok(r) = rx.try_recv() {
-                        self.test_msg = Some(match r {
-                            Ok(m) => (true, m),
-                            Err(e) => (false, e.to_string()),
-                        });
-                        self.test_rx = None;
-                    }
-                }
-                if let Some((ok, m)) = &self.test_msg {
-                    let c = if *ok { ACCENT } else { Color32::from_rgb(0xe5, 0x53, 0x4b) };
-                    ui.label(egui::RichText::new(m.as_str()).color(c));
-                }
-                if ui.button("Cancel").clicked() {
-                    self.secret.clear();
-                    self.settings = false
-                }
-            });
-            if !win {
-                self.secret.clear();
-                self.settings = false
-            }
-        }
-        if let Err(e) = result {
-            self.log_line(format!("error: {e:#}"));
-            self.status = e.to_string();
-            self.status_err = true;
-        }
-        if let Some(mut path) = self.vault_win.take() {
-            let mut keep = true;
-            let mut go = false;
-            egui::Window::new("Open another vault").collapsible(false).show(ctx, |ui| {
-                ui.label("Folder to use as vault (created if missing)");
-                ui.add(egui::TextEdit::singleline(&mut path).desired_width(360.));
-                ui.horizontal(|ui| {
-                    go = ui.button("Open").clicked();
-                    if ui.button("Cancel").clicked() {
-                        keep = false
+                ui.add_space(4.);
+                egui::ScrollArea::vertical().id_salt("document").show(ui, |ui| {
+                    if self.view == View::Edit {
+                        self.editor(ui);
+                    } else {
+                        let md = wiki_to_md(&self.doc.text);
+                        let targets = unique_links(&self.doc.text);
+                        for n in &targets {
+                            self.cache.add_link_hook(format!("emerald:{}", stem(n)));
+                        }
+                        CommonMarkViewer::new().show(ui, &mut self.cache, &md);
+                        for n in targets {
+                            let hook = format!("emerald:{}", stem(&n));
+                            if self.cache.get_link_hook(&hook) == Some(true) {
+                                act = Some(Act::Open(n));
+                            }
+                        }
                     }
                 });
             });
-            if go {
-                let p = PathBuf::from(path.trim());
-                match fs::create_dir_all(&p).map_err(Into::into).and_then(|_| Notebook::new(p)) {
-                    Ok(mut nb) => {
-                        nb.log = std::mem::take(&mut self.log);
-                        nb.show_log = self.show_log;
-                        nb.status = "Vault opened".into();
-                        *self = nb;
-                    }
-                    Err(e) => {
-                        self.status = e.to_string();
-                        self.status_err = true;
-                    }
-                }
-            } else if keep {
-                self.vault_win = Some(path)
+        if self.doc.name.is_empty() {
+            self.tour_rects[2] = Some(central.response.rect.shrink(40.));
+        }
+
+        // ---------------- deferred actions
+        if let Some(folder) = want_new {
+            if let Err(e) = self.new_note(&folder) {
+                result = Err(e);
             }
         }
-        if let Some(step) = self.tour {
-            const STEPS: [&str; 4] = [
-                "Ribbon (left edge): files, search, graph and daily note live here.",
-                "Ctrl+N makes a note. Click its title to rename it; it autosaves.",
-                "Type [[ to link to another note. Ctrl+P opens the command palette.",
-                "The bottom bar shows vault, note count and status. Ctrl+P also opens the palette from the ribbon.",
-            ];
-            let mut next = Some(step);
-            egui::Window::new(format!("Tour {}/4", step + 1)).collapsible(false).anchor(egui::Align2::LEFT_TOP, [60., 60.]).show(ctx, |ui| {
-                ui.label(STEPS[step]);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().button_padding = Vec2::new(18., 8.);
-                    if ui.button(egui::RichText::new(if step == 3 { "Done" } else { "Next" }).size(15.)).clicked() {
-                        next = if step == 3 { None } else { Some(step + 1) }
-                    }
-                    if ui.button(egui::RichText::new("Skip").size(15.)).clicked() {
-                        next = None
-                    }
-                });
-            });
-            self.tour = next;
+        if let Some(a) = act {
+            let r = match a {
+                Act::Open(n) => self.open(n),
+                Act::Rename(n) => self.open(n).map(|_| {
+                    self.focus_title = true;
+                    self.select_title = true;
+                    self.focus_editor = false;
+                }),
+                Act::Move(n) => {
+                    self.move_win = Some((n.clone(), folder_of(&n).trim_end_matches('/').to_owned()));
+                    Ok(())
+                }
+                Act::Duplicate(n) => self.duplicate(&n),
+                Act::Delete(n) => {
+                    self.confirm_delete = Some(n);
+                    Ok(())
+                }
+                Act::NewIn(f) => self.new_note(&f),
+                Act::RenameFolder(f) => {
+                    self.folder_rename = Some((f.clone(), f.trim_end_matches('/').to_owned()));
+                    Ok(())
+                }
+                Act::Reveal(n) => target(&self.vault.root, n.trim_end_matches('/')).map(|p| reveal(&p)),
+            };
+            if let Err(e) = r {
+                result = Err(e);
+            }
         }
+
+        // ---------------- windows
+        self.palette_window(ctx, &mut result);
+        self.settings_window(ctx, &mut result);
+        self.prompts(ctx, &mut result, &backlinks);
+        self.trash_window(ctx, &mut result);
+        self.compare_window(ctx, &mut result);
+        self.undo_toast(ctx, &mut result);
+        self.vault_window(ctx);
+        self.tour_window(ctx, &mut result);
         if self.show_log {
             let mut win = true;
             egui::Window::new("Log").open(&mut win).default_size([480., 260.]).show(ctx, |ui| {
                 egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
                     if self.log.is_empty() {
-                        ui.label(egui::RichText::new("Nothing logged yet.").color(MUTED));
+                        ui.label(muted("Nothing logged yet."));
                     }
                     for l in &self.log {
                         ui.label(egui::RichText::new(l.as_str()).size(12.));
@@ -1485,5 +1952,873 @@ impl eframe::App for Notebook {
             });
             self.show_log = win;
         }
+        if let Err(e) = result {
+            self.fail(e);
+        }
+    }
+}
+
+impl Notebook {
+    fn editor(&mut self, ui: &mut egui::Ui) {
+        let p = pal();
+        let eid = ui.make_persistent_id("doceditor");
+        let matches_for = |pick: &Option<(usize, usize, String)>, notes: &BTreeMap<String, String>| -> Vec<String> {
+            match pick {
+                Some((_, _, q)) => {
+                    let mut m: Vec<(i32, String)> = notes.keys().filter_map(|n| fuzzy(stem(n), q).map(|s| (s, n.clone()))).collect();
+                    m.sort_by(|a, b| b.0.cmp(&a.0));
+                    m.into_iter().take(6).map(|x| x.1).collect()
+                }
+                None => Vec::new(),
+            }
+        };
+        let matches = matches_for(&self.pick, &self.notes);
+        let mut insert: Option<String> = None;
+        if self.pick.is_some() && !matches.is_empty() {
+            let (take, up, down, esc) = ui.input_mut(|i| {
+                (
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) || i.consume_key(egui::Modifiers::NONE, egui::Key::Tab),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+                )
+            });
+            if down {
+                self.pick_sel = (self.pick_sel + 1).min(matches.len() - 1);
+            }
+            if up {
+                self.pick_sel = self.pick_sel.saturating_sub(1);
+            }
+            if take {
+                insert = Some(matches[self.pick_sel.min(matches.len() - 1)].clone())
+            }
+            if esc {
+                self.pick = None;
+            }
+        }
+        let out = egui::TextEdit::multiline(&mut self.doc.text)
+            .id(eid)
+            .frame(false)
+            .hint_text(muted("Start typing… type [[ to link another note"))
+            .desired_width(f32::INFINITY)
+            .desired_rows(26)
+            .show(ui);
+        let r = out.response.clone();
+        let cursor = out.cursor_range.map(|c| c.primary.ccursor.index);
+        let before_pick = self.pick.clone();
+        if r.has_focus() {
+            let now = cursor.and_then(|c| pick_at(&self.doc.text, c));
+            if now.as_ref().map(|x| &x.2) != self.pick.as_ref().map(|x| &x.2) {
+                self.pick_sel = 0;
+            }
+            self.pick = now;
+        } else if insert.is_none() {
+            self.pick = None
+        }
+        if self.pick != before_pick {
+            ui.ctx().request_repaint();
+        }
+        let matches = matches_for(&self.pick, &self.notes);
+        if let (Some((s, c, _)), false) = (self.pick.clone(), matches.is_empty()) {
+            // Anchor the suggestions just below the text cursor.
+            let crect = out.galley.pos_from_cursor(&out.galley.from_ccursor(egui::text::CCursor::new(c)));
+            let at = out.galley_pos + crect.left_bottom().to_vec2() + Vec2::new(0., 4.);
+            egui::Area::new(egui::Id::new("pickpop")).order(egui::Order::Foreground).fixed_pos(at).show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(240.);
+                    for (i, m) in matches.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            if ui.selectable_label(i == self.pick_sel, leaf(m)).clicked() {
+                                insert = Some(m.clone())
+                            }
+                            let f = folder_of(m);
+                            if !f.is_empty() {
+                                ui.label(egui::RichText::new(f.trim_end_matches('/')).small().color(p.muted));
+                            }
+                        });
+                    }
+                    ui.label(egui::RichText::new("↑↓ choose · Enter insert · Esc close").small().color(p.muted));
+                });
+            });
+            if let Some(m) = insert.take() {
+                let chars: Vec<char> = self.doc.text.chars().collect();
+                let mut text: String = chars[..s].iter().collect();
+                text.push_str(stem(&m));
+                text.push_str("]]");
+                let end = text.chars().count();
+                // Skip a closing "]]" the user already typed.
+                let mut rest = c.min(chars.len());
+                if chars.get(rest) == Some(&']') && chars.get(rest + 1) == Some(&']') {
+                    rest += 2;
+                }
+                text.extend(chars[rest..].iter());
+                self.doc.text = text;
+                if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), eid) {
+                    st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(end))));
+                    st.store(ui.ctx(), eid);
+                }
+                self.pick = None;
+                self.doc.dirty = true;
+                self.last_edit = Some(Instant::now());
+                r.request_focus();
+            }
+        }
+        if std::mem::take(&mut self.focus_editor) {
+            r.request_focus()
+        }
+        if r.changed() {
+            self.doc.dirty = true;
+            self.last_edit = Some(Instant::now());
+        }
+    }
+
+    fn run_command(&mut self, ctx: &egui::Context, id: &str) -> Result<()> {
+        match id {
+            "new" => self.new_note("")?,
+            "folder" => {
+                self.sidebar = true;
+                self.new_folder = Some(String::new());
+            }
+            "graph" => self.view = View::Graph,
+            "daily" => self.open(format!("Daily/{}.md", chrono::Local::now().date_naive()))?,
+            "search" => {
+                self.sidebar = true;
+                self.focus_search = true;
+                self.view = View::Edit;
+            }
+            "side" => self.sidebar = !self.sidebar,
+            "links" => self.hide_links = !self.hide_links,
+            "sync" => {
+                if self.sync_state == SyncState::Off {
+                    self.settings = Some(Section::Sync)
+                } else {
+                    self.sync(ctx)?
+                }
+            }
+            "settings" => self.settings = Some(Section::Sync),
+            "appearance" => self.settings = Some(Section::Appearance),
+            "theme" => {
+                self.prefs.theme = if IS_LIGHT.load(Ordering::Relaxed) { ThemePref::Dark } else { ThemePref::Light };
+                save_json(prefs_file(), &self.prefs);
+            }
+            "log" => self.show_log = true,
+            "vault" => self.vault_win = Some(self.vault.root.display().to_string()),
+            "trash" => self.trash = true,
+            "tour" => self.tour = Some(0),
+            "shortcuts" => self.settings = Some(Section::Shortcuts),
+            "rename" => {
+                self.focus_title = true;
+                self.select_title = true;
+            }
+            "move" => self.move_win = Some((self.doc.name.clone(), folder_of(&self.doc.name).trim_end_matches('/').to_owned())),
+            "delete" => self.confirm_delete = Some(self.doc.name.clone()),
+            "preview" => self.view = if self.view == View::Preview { View::Edit } else { View::Preview },
+            n => {
+                if let Some(n) = n.strip_prefix("note:") {
+                    self.open(n.to_owned())?
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn palette_window(&mut self, ctx: &egui::Context, result: &mut Result<()>) {
+        if !self.palette {
+            return;
+        }
+        let p = pal();
+        let mut cmds: Vec<(String, &str, &str)> = vec![
+            ("New note".into(), "Ctrl+N", "new"),
+            ("New folder".into(), "", "folder"),
+            ("Search notes".into(), "Ctrl+O", "search"),
+            ("Open today's daily note".into(), "", "daily"),
+            ("Open graph view".into(), "Ctrl+G", "graph"),
+            ("Toggle sidebar".into(), "", "side"),
+            ("Toggle \"Linked from\" panel".into(), "", "links"),
+            ("Sync now".into(), "", "sync"),
+            ("Settings".into(), "", "settings"),
+            ("Switch light / dark theme".into(), "", "theme"),
+            ("Open another vault…".into(), "", "vault"),
+            ("Show trash".into(), "", "trash"),
+            ("Show log".into(), "", "log"),
+            ("Keyboard shortcuts".into(), "", "shortcuts"),
+            ("Show tour".into(), "", "tour"),
+        ];
+        if !self.doc.name.is_empty() {
+            cmds.push(("Rename current note".into(), "", "rename"));
+            cmds.push(("Move current note to folder…".into(), "", "move"));
+            cmds.push(("Toggle preview".into(), "", "preview"));
+            cmds.push(("Delete current note".into(), "", "delete"));
+        }
+        let q = self.pal_query.trim().to_owned();
+        let mut shown: Vec<(String, String, String, bool)> = Vec::new();
+        if q.is_empty() {
+            // Recently opened notes first.
+            for t in self.tabs.iter().rev().filter(|t| **t != self.doc.name).take(5) {
+                shown.push((leaf(t).to_owned(), "recent".into(), format!("note:{t}"), true));
+            }
+        } else {
+            let mut notes: Vec<(i32, &String)> = self.notes.keys().filter_map(|n| fuzzy(stem(n), &q).map(|s| (s, n))).collect();
+            notes.sort_by(|a, b| b.0.cmp(&a.0));
+            for (_, n) in notes.into_iter().take(8) {
+                shown.push((leaf(n).to_owned(), folder_of(n).trim_end_matches('/').to_owned(), format!("note:{n}"), true));
+            }
+        }
+        let mut c: Vec<(i32, (String, &str, &str))> = cmds.into_iter().filter_map(|x| fuzzy(&x.0, &q).map(|s| (s, x))).collect();
+        c.sort_by(|a, b| b.0.cmp(&a.0));
+        for (_, (l, k, id)) in c {
+            shown.push((l, k.to_owned(), id.to_owned(), false));
+        }
+        let (up, down, enter, esc) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+            )
+        });
+        if !shown.is_empty() {
+            if down {
+                self.pal_sel = (self.pal_sel + 1) % shown.len();
+            }
+            if up {
+                self.pal_sel = (self.pal_sel + shown.len() - 1) % shown.len();
+            }
+            self.pal_sel = self.pal_sel.min(shown.len() - 1);
+        }
+        let mut chosen: Option<String> = None;
+        let mut keep = !esc;
+        let before = self.pal_query.clone();
+        egui::Window::new("palette")
+            .title_bar(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, [0., 80.])
+            .min_width(480.)
+            .max_width(480.)
+            .show(ctx, |ui| {
+                let r = ui.add(egui::TextEdit::singleline(&mut self.pal_query).hint_text(muted("Jump to a note or run a command…")).desired_width(f32::INFINITY));
+                r.request_focus();
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(360.).show(ui, |ui| {
+                    let w = ui.available_width();
+                    let mut last_note = None;
+                    for (i, (label, key, id, is_note)) in shown.iter().enumerate() {
+                        if last_note != Some(*is_note) {
+                            ui.label(egui::RichText::new(if *is_note { if q.is_empty() { "Recent notes" } else { "Notes" } } else { "Commands" }).small().color(p.muted));
+                            last_note = Some(*is_note);
+                        }
+                        let sel = i == self.pal_sel;
+                        let b = ui.add(egui::Button::new(label.as_str()).shortcut_text(key.as_str()).selected(sel).frame(sel).min_size(Vec2::new(w, 26.)));
+                        if sel && (up || down) {
+                            b.scroll_to_me(None);
+                        }
+                        if b.hovered() && ui.input(|i| i.pointer.delta() != Vec2::ZERO) {
+                            self.pal_sel = i;
+                        }
+                        if b.clicked() {
+                            chosen = Some(id.clone())
+                        }
+                    }
+                    if shown.is_empty() {
+                        ui.label(muted("No matches."));
+                        if ui.button(format!("Create note \"{q}\"")).clicked() {
+                            chosen = Some(format!("note:{}", note_name(&q)));
+                        }
+                    }
+                });
+                ui.label(egui::RichText::new("↑↓ move · Enter run · Esc close").small().color(p.muted));
+            });
+        if self.pal_query != before {
+            self.pal_sel = 0;
+        }
+        if enter {
+            chosen = shown.get(self.pal_sel).map(|s| s.2.clone()).or_else(|| (!q.is_empty()).then(|| format!("note:{}", note_name(&q))));
+        }
+        if let Some(id) = chosen {
+            keep = false;
+            if let Err(e) = self.run_command(ctx, &id) {
+                *result = Err(e);
+            }
+        }
+        self.palette = keep;
+    }
+
+    fn settings_window(&mut self, ctx: &egui::Context, result: &mut Result<()>) {
+        let Some(mut section) = self.settings else {
+            return;
+        };
+        let p = pal();
+        let mut open = true;
+        egui::Window::new("Settings").open(&mut open).collapsible(false).default_width(500.).anchor(egui::Align2::CENTER_TOP, [0., 60.]).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                for (s, l) in [(Section::Sync, "Sync"), (Section::Appearance, "Appearance"), (Section::Vault, "Vault"), (Section::Shortcuts, "Shortcuts")] {
+                    ui.selectable_value(&mut section, s, l);
+                }
+            });
+            ui.separator();
+            match section {
+                Section::Sync => self.sync_section(ui, ctx, result),
+                Section::Appearance => {
+                    ui.label("Theme");
+                    ui.horizontal(|ui| {
+                        let before = self.prefs.theme;
+                        ui.radio_value(&mut self.prefs.theme, ThemePref::System, "Match system");
+                        ui.radio_value(&mut self.prefs.theme, ThemePref::Dark, "Dark");
+                        ui.radio_value(&mut self.prefs.theme, ThemePref::Light, "Light");
+                        if self.prefs.theme != before {
+                            save_json(prefs_file(), &self.prefs);
+                        }
+                    });
+                    ui.add_space(8.);
+                    ui.label("Text size");
+                    ui.horizontal(|ui| {
+                        let z = ctx.zoom_factor();
+                        if ui.button("A−").clicked() {
+                            ctx.set_zoom_factor((z - 0.1).clamp(0.7, 2.));
+                        }
+                        ui.label(format!("{:.0}%", z * 100.));
+                        if ui.button("A+").clicked() {
+                            ctx.set_zoom_factor((z + 0.1).clamp(0.7, 2.));
+                        }
+                        if ui.button("Reset").clicked() {
+                            ctx.set_zoom_factor(1.);
+                        }
+                        ui.label(muted("Ctrl+= / Ctrl+− / Ctrl+0"));
+                    });
+                }
+                Section::Vault => {
+                    ui.label("This vault");
+                    ui.label(muted(self.vault.root.display().to_string()));
+                    ui.horizontal(|ui| {
+                        if ui.button("Reveal in file manager").clicked() {
+                            reveal(&self.vault.root);
+                        }
+                        if ui.button("Open another vault…").clicked() {
+                            self.vault_win = Some(self.vault.root.display().to_string());
+                        }
+                        if ui.button("Trash…").clicked() {
+                            self.trash = true;
+                        }
+                    });
+                    let recent: Vec<PathBuf> = self.prefs.recent.iter().skip(1).cloned().collect();
+                    if !recent.is_empty() {
+                        ui.add_space(8.);
+                        ui.label("Recent vaults");
+                        for v in recent {
+                            ui.horizontal(|ui| {
+                                ui.label(v.display().to_string());
+                                if ui.small_button("Open").clicked() {
+                                    self.vault_win = Some(v.display().to_string());
+                                }
+                            });
+                        }
+                    }
+                }
+                Section::Shortcuts => {
+                    egui::Grid::new("keys").num_columns(2).spacing([24., 6.]).show(ui, |ui| {
+                        for (k, d) in [
+                            ("Ctrl+N", "New note"),
+                            ("Ctrl+O, Ctrl+Shift+F", "Search notes"),
+                            ("Ctrl+P, Ctrl+K", "Jump to note / command palette"),
+                            ("Ctrl+G", "Graph view"),
+                            ("Ctrl+W", "Close tab"),
+                            ("Ctrl+S", "Save now (notes also save after 1 s)"),
+                            ("Ctrl+= / − / 0", "Zoom in / out / reset"),
+                            ("[[", "Link another note"),
+                            ("Esc", "Close search, palette or rename"),
+                        ] {
+                            ui.label(egui::RichText::new(k).strong());
+                            ui.label(d);
+                            ui.end_row();
+                        }
+                    });
+                }
+            }
+            let _ = p;
+        });
+        self.settings = open.then_some(section);
+        if !open {
+            self.secret.clear();
+            self.edit_server = false;
+        }
+    }
+
+    fn sync_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, result: &mut Result<()>) {
+        let p = pal();
+        let current = sync::current(&self.vault);
+        if let (Some((server, env)), false) = (&current, self.edit_server) {
+            let (txt, col) = match &self.sync_state {
+                SyncState::Syncing => ("Syncing…".to_owned(), p.muted),
+                SyncState::Error(e) => (format!("Last sync failed: {e}"), p.red),
+                _ => (format!("Synced {}", self.last_sync.map(ago).unwrap_or_else(|| "— waiting for first pass".into())), p.accent),
+            };
+            ui.label(egui::RichText::new(txt).color(col));
+            ui.label(format!("Server: {server}"));
+            if *env {
+                ui.label(muted("Set by the EMERALD_SERVER and EMERALD_TOKEN environment variables."));
+            }
+            ui.label(muted("Changes sync automatically every few seconds while Emerald is open."));
+            ui.add_space(6.);
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!self.busy(), egui::Button::new("Sync now")).clicked() {
+                    if let Err(e) = self.sync(ctx) {
+                        *result = Err(e);
+                    }
+                }
+                if !env && ui.button("Change server…").clicked() {
+                    self.edit_server = true;
+                    self.server = server.clone();
+                    self.test_msg = None;
+                }
+                if !env && ui.button("Disconnect").on_hover_text("Stop syncing this vault. Your notes stay on this computer.").clicked() {
+                    match sync::disconnect(&self.vault) {
+                        Ok(()) => {
+                            self.sync_state = SyncState::Off;
+                            self.last_sync = None;
+                            self.say("Sync turned off");
+                        }
+                        Err(e) => *result = Err(e),
+                    }
+                }
+                if ui.button("Show log").clicked() {
+                    self.show_log = true;
+                }
+            });
+            let conflicts = self.conflicts();
+            if !conflicts.is_empty() {
+                ui.add_space(10.);
+                ui.label(egui::RichText::new(format!("{} {} a decision", plural(conflicts.len(), "conflict"), if conflicts.len() == 1 { "needs" } else { "need" })).color(p.amber).strong());
+                ui.label(muted("Both sides edited these notes. Compare them and keep the version you want."));
+                for c in conflicts {
+                    ui.horizontal(|ui| {
+                        ui.label(conflict_original(&c).map(|o| stem(&o).to_owned()).unwrap_or_default());
+                        if ui.small_button("Compare…").clicked() {
+                            self.compare = Some(c.clone());
+                        }
+                    });
+                }
+            }
+            return;
+        }
+        ui.label(egui::RichText::new("Keep this vault the same on several computers").strong());
+        ui.label(muted("Sync uses an Emerald Server that you run yourself. It keeps a copy of your notes as plain files."));
+        ui.add_space(4.);
+        ui.label(muted("1. Start emerald-server on the computer that will keep the shared copy (see SERVER_SETUP.md).\n2. Enter its address and the token it was started with.\n3. Press Test, then Connect."));
+        ui.add_space(8.);
+        ui.label("Server address");
+        ui.add(egui::TextEdit::singleline(&mut self.server).hint_text(muted("https://notes.example.org")).desired_width(360.));
+        ui.label(egui::RichText::new("Same computer: http://127.0.0.1:7878 · Other computers need an https:// address.").small().color(p.muted));
+        ui.add_space(4.);
+        ui.label("Server token");
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.secret).password(!self.show_secret).desired_width(300.));
+            ui.checkbox(&mut self.show_secret, "Show");
+        });
+        ui.label(egui::RichText::new(format!("The EMERALD_TOKEN value, at least 32 characters ({} typed).", self.secret.chars().count())).small().color(p.muted));
+        ui.add_space(6.);
+        ui.horizontal(|ui| {
+            let testing = self.test_rx.is_some();
+            if ui.add_enabled(!testing, egui::Button::new(if testing { "Testing…" } else { "Test" })).clicked() {
+                let (tx, rx) = mpsc::channel();
+                let (s, t) = (self.server.trim().to_owned(), self.secret.trim().to_owned());
+                let c = ctx.clone();
+                self.test_msg = None;
+                self.test_rx = Some(rx);
+                std::thread::spawn(move || {
+                    let _ = tx.send(sync::test(&s, &t));
+                    c.request_repaint();
+                });
+            }
+            if primary(ui, "Connect").clicked() {
+                match sync::configure(&self.vault, sync::Connection { server: self.server.trim().to_owned(), token: self.secret.trim().to_owned() }) {
+                    Ok(()) => {
+                        self.secret.clear();
+                        self.edit_server = false;
+                        self.sync_state = SyncState::Idle;
+                        self.last_sync = None;
+                        self.last_auto_sync = Instant::now() - Duration::from_secs(10);
+                        self.test_msg = None;
+                        self.say("Sync connected");
+                    }
+                    Err(e) => self.test_msg = Some((false, friendly(&e))),
+                }
+            }
+            if self.edit_server && ui.button("Cancel").clicked() {
+                self.edit_server = false;
+                self.secret.clear();
+                self.test_msg = None;
+            }
+        });
+        if let Some(rx) = &self.test_rx {
+            if let Ok(r) = rx.try_recv() {
+                self.test_msg = Some(match r {
+                    Ok(m) => (true, format!("{m} Press Connect to start syncing.")),
+                    Err(e) => (false, friendly(&e)),
+                });
+                self.test_rx = None;
+            }
+        }
+        if let Some((ok, m)) = &self.test_msg {
+            ui.add_space(4.);
+            ui.label(egui::RichText::new(m.as_str()).color(if *ok { p.accent } else { p.red }));
+        }
+    }
+
+    /// Delete confirmation, move-to-folder and folder rename prompts.
+    fn prompts(&mut self, ctx: &egui::Context, result: &mut Result<()>, backlinks_cur: &[String]) {
+        let p = pal();
+        if let Some(name) = self.confirm_delete.clone() {
+            let linked = if name == self.doc.name { backlinks_cur.to_vec() } else { self.backlinks_of(&name) };
+            let mut close = false;
+            let m = egui::Modal::new(egui::Id::new("delete")).show(ctx, |ui| {
+                ui.set_width(340.);
+                ui.heading(format!("Delete \"{}\"?", leaf(&name)));
+                ui.add_space(4.);
+                ui.label("It moves to the Trash, where you can restore it later.");
+                if !linked.is_empty() {
+                    ui.label(egui::RichText::new(format!("{} {} to it: {}.", plural(linked.len(), "note"), if linked.len() == 1 { "links" } else { "link" }, linked.iter().map(|n| leaf(n)).collect::<Vec<_>>().join(", "))).color(p.amber));
+                }
+                ui.add_space(8.);
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(egui::RichText::new("Move to Trash").color(Color32::WHITE)).fill(p.red)).clicked() {
+                        if let Err(e) = self.delete_note(&name) {
+                            *result = Err(e);
+                        }
+                        close = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+            });
+            if close || m.should_close() {
+                self.confirm_delete = None;
+            }
+        }
+        if let Some((note, mut folder)) = self.move_win.take() {
+            let mut keep = true;
+            let mut go = false;
+            egui::Window::new("Move note").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0., 120.]).show(ctx, |ui| {
+                ui.label(format!("Move \"{}\" to folder", leaf(&note)));
+                let r = ui.add(egui::TextEdit::singleline(&mut folder).hint_text(muted("Folder, e.g. Projects/2026 (empty = top level)")).desired_width(320.));
+                r.request_focus();
+                go = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let mut folders: Vec<&str> = self.notes.keys().map(|n| folder_of(n).trim_end_matches('/')).filter(|f| !f.is_empty()).collect();
+                folders.dedup();
+                if !folders.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        for f in folders {
+                            if ui.small_button(f).clicked() {
+                                folder = f.to_owned();
+                            }
+                        }
+                    });
+                }
+                ui.horizontal(|ui| {
+                    go |= primary(ui, "Move").clicked();
+                    if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        keep = false
+                    }
+                });
+            });
+            if go {
+                let f = folder.trim().trim_matches('/');
+                let to = if f.is_empty() { format!("{}.md", leaf(&note)) } else { format!("{f}/{}.md", leaf(&note)) };
+                let r = if self.doc.name == note { Ok(()) } else { self.open(note.clone()) };
+                if let Err(e) = r.and_then(|_| self.rename_to(to)) {
+                    *result = Err(e);
+                }
+            } else if keep {
+                self.move_win = Some((note, folder));
+            }
+        }
+        if let Some((from, mut to)) = self.folder_rename.take() {
+            let mut keep = true;
+            let mut go = false;
+            egui::Window::new("Rename folder").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0., 120.]).show(ctx, |ui| {
+                let r = ui.add(egui::TextEdit::singleline(&mut to).desired_width(300.));
+                r.request_focus();
+                go = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.label(muted("Notes inside move with it. Links to them are not rewritten."));
+                ui.horizontal(|ui| {
+                    go |= primary(ui, "Rename").clicked();
+                    if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        keep = false
+                    }
+                });
+            });
+            if go {
+                if let Err(e) = self.rename_folder(&from, &to) {
+                    *result = Err(e);
+                }
+            } else if keep {
+                self.folder_rename = Some((from, to));
+            }
+        }
+    }
+
+    fn undo_toast(&mut self, ctx: &egui::Context, result: &mut Result<()>) {
+        let Some((name, from, at)) = self.undo.clone() else {
+            return;
+        };
+        if at.elapsed() > Duration::from_secs(10) {
+            self.undo = None;
+            return;
+        }
+        ctx.request_repaint_after(Duration::from_millis(500));
+        let p = pal();
+        egui::Area::new(egui::Id::new("undo-toast")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_BOTTOM, [0., -40.]).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(14, 8)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Moved \"{}\" to Trash", leaf(&name)));
+                    if ui.add(egui::Button::new(egui::RichText::new("Undo").strong().color(p.accent))).clicked() {
+                        self.undo = None;
+                        if let Err(e) = self.restore(&name, &from) {
+                            *result = Err(e);
+                        }
+                    }
+                    if ui.add(egui::Button::new(muted("×")).frame(false)).clicked() {
+                        self.undo = None;
+                    }
+                });
+            });
+        });
+    }
+
+    fn trash_window(&mut self, ctx: &egui::Context, result: &mut Result<()>) {
+        if !self.trash {
+            return;
+        }
+        let p = pal();
+        let dir = self.vault.root.join(".trash");
+        let mut items: Vec<String> = fs::read_dir(&dir).map(|r| r.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+        items.sort();
+        items.reverse();
+        let mut open = true;
+        egui::Window::new("Trash").open(&mut open).default_width(560.).show(ctx, |ui| {
+            if items.is_empty() {
+                ui.label(muted("Trash is empty."));
+            }
+            egui::ScrollArea::vertical().max_height(360.).show(ui, |ui| {
+                for f in &items {
+                    let (name, when) = trash_entry(f).unwrap_or((f.clone(), String::new()));
+                    ui.horizontal(|ui| {
+                        ui.allocate_ui_with_layout(Vec2::new(230., 18.), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.set_min_width(230.);
+                            ui.add(egui::Label::new(stem(&name)).truncate()).on_hover_text(f);
+                        });
+                        ui.allocate_ui_with_layout(Vec2::new(110., 18.), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.set_min_width(110.);
+                            ui.label(muted(&when));
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if self.trash_confirm.as_deref() == Some(f.as_str()) {
+                                if ui.add(egui::Button::new(egui::RichText::new("Confirm delete").color(Color32::WHITE)).fill(p.red)).clicked() {
+                                    if let Err(e) = fs::remove_file(dir.join(f)) {
+                                        *result = Err(e.into());
+                                    }
+                                    self.trash_confirm = None;
+                                }
+                            } else if ui.small_button("Delete forever").clicked() {
+                                self.trash_confirm = Some(f.clone());
+                            }
+                            if ui.small_button("Restore").clicked() {
+                                if let Err(e) = self.restore(&name, &dir.join(f)) {
+                                    *result = Err(e);
+                                }
+                            }
+                        });
+                    });
+                }
+            });
+        });
+        self.trash = open;
+    }
+
+    fn compare_window(&mut self, ctx: &egui::Context, result: &mut Result<()>) {
+        let Some(copy) = self.compare.clone() else {
+            return;
+        };
+        let Some(orig) = conflict_original(&copy) else {
+            self.compare = None;
+            return;
+        };
+        let theirs = self.notes.get(&orig).cloned().unwrap_or_default();
+        let mine = self.notes.get(&copy).cloned().unwrap_or_default();
+        let mut open = true;
+        let mut choice: Option<bool> = None;
+        egui::Window::new(format!("Conflict: {}", stem(&orig))).open(&mut open).default_size([760., 440.]).show(ctx, |ui| {
+            ui.label(muted("The server's version kept the note's name. Your edit was saved as a copy."));
+            ui.columns(2, |cols| {
+                for (ui, (title, text)) in cols.iter_mut().zip([("Server version", &theirs), ("Your version (copy)", &mine)]) {
+                    ui.label(egui::RichText::new(title).strong());
+                    egui::ScrollArea::vertical().id_salt(title).max_height(320.).show(ui, |ui| {
+                        let mut t = text.as_str();
+                        ui.add(egui::TextEdit::multiline(&mut t).desired_width(f32::INFINITY));
+                    });
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Keep server version").clicked() {
+                    choice = Some(false);
+                }
+                if primary(ui, "Keep my version").clicked() {
+                    choice = Some(true);
+                }
+                if ui.button("Keep both").on_hover_text("Leave both notes as they are").clicked() {
+                    self.compare = None;
+                }
+            });
+        });
+        if let Some(keep_mine) = choice {
+            let r = (|| -> Result<()> {
+                ensure!(!self.busy(), "Wait for sync to finish, then try again");
+                self.save()?;
+                if keep_mine {
+                    atomic(&target(&self.vault.root, &orig)?, mine.as_bytes())?;
+                }
+                let dir = self.vault.root.join(".trash");
+                fs::create_dir_all(&dir)?;
+                let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                fs::rename(target(&self.vault.root, &copy)?, dir.join(format!("{stamp}-{}", copy.replace('/', "__"))))?;
+                self.refresh()?;
+                self.tabs.retain(|t| *t != copy);
+                if self.doc.name == copy || self.doc.name == orig {
+                    self.load(orig.clone())?;
+                }
+                self.say(format!("Resolved conflict in {}", leaf(&orig)));
+                Ok(())
+            })();
+            if let Err(e) = r {
+                *result = Err(e);
+            }
+            self.compare = None;
+        } else if !open {
+            self.compare = None;
+        }
+    }
+
+    fn vault_window(&mut self, ctx: &egui::Context) {
+        let Some(mut path) = self.vault_win.take() else {
+            return;
+        };
+        let mut keep = true;
+        let mut go = false;
+        egui::Window::new("Open another vault").collapsible(false).anchor(egui::Align2::CENTER_TOP, [0., 100.]).show(ctx, |ui| {
+            ui.label("Folder to use as a vault (created if it doesn't exist)");
+            let r = ui.add(egui::TextEdit::singleline(&mut path).desired_width(380.));
+            go = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let recent: Vec<PathBuf> = self.prefs.recent.iter().skip(1).cloned().collect();
+            if !recent.is_empty() {
+                ui.label(muted("Recent"));
+                for v in recent {
+                    if ui.selectable_label(path == v.display().to_string(), v.display().to_string()).clicked() {
+                        path = v.display().to_string();
+                    }
+                }
+            }
+            ui.horizontal(|ui| {
+                go |= primary(ui, "Open").clicked();
+                if ui.button("Cancel").clicked() {
+                    keep = false
+                }
+            });
+        });
+        if go {
+            if self.busy() {
+                self.fail("Wait for sync to finish, then switch vaults");
+                self.vault_win = Some(path);
+                return;
+            }
+            if let Err(e) = self.save() {
+                self.fail(e);
+                return;
+            }
+            let p = PathBuf::from(path.trim());
+            match fs::create_dir_all(&p).map_err(Into::into).and_then(|_| Notebook::new(p)) {
+                Ok(mut nb) => {
+                    nb.log = std::mem::take(&mut self.log);
+                    nb.show_log = self.show_log;
+                    nb.say("Vault opened");
+                    *self = nb;
+                }
+                Err(e) => self.fail(e),
+            }
+        } else if keep {
+            self.vault_win = Some(path)
+        }
+    }
+
+    fn tour_window(&mut self, ctx: &egui::Context, result: &mut Result<()>) {
+        let Some(step) = self.tour else {
+            return;
+        };
+        const STEPS: [(&str, &str); 4] = [
+            ("Switch views", "These icons open Files, Search, the Graph and today's Daily note. Settings and sync live at the bottom."),
+            ("Your notes", "Search is always at the top. New note and New folder are right below it. Right-click a note or folder for more."),
+            ("Write and link", "Click a note's title to rename it. Type [[ to link another note. Notes save on their own."),
+            ("Status bar", "Click the vault name to switch vaults. The right side shows whether sync is on."),
+        ];
+        let p = pal();
+        let target = self.tour_rects[step].or(self.tour_rects[0]);
+        if let Some(r) = target {
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tour-spot")));
+            painter.rect_stroke(r.shrink(2.), 8., egui::Stroke::new(2.5_f32, p.accent), egui::StrokeKind::Inside);
+        }
+        let screen = ctx.screen_rect();
+        let pos = match (step, target) {
+            (0, Some(r)) | (1, Some(r)) => Pos2::new(r.right() + 12., r.top() + 60.),
+            // Below the title, or inside the highlight when it fills the editor.
+            (2, Some(r)) => Pos2::new((r.left() + 20.).min(screen.right() - 340.), if r.bottom() + 180. > screen.bottom() { r.top() + 20. } else { r.bottom() + 12. }),
+            (3, Some(r)) => Pos2::new(r.left() + 20., r.top() - 150.),
+            _ => Pos2::new(60., 60.),
+        };
+        let mut next = Some(step);
+        egui::Window::new(format!("tour{step}")).title_bar(false).resizable(false).fixed_pos(pos).fixed_size([300., 0.]).order(egui::Order::Foreground).show(ctx, |ui| {
+            ui.label(muted(format!("{} of 4", step + 1)));
+            ui.label(egui::RichText::new(STEPS[step].0).strong().size(16.));
+            ui.label(STEPS[step].1);
+            ui.add_space(6.);
+            ui.horizontal(|ui| {
+                if step == 3 {
+                    let label = if self.notes.is_empty() { "Create my first note" } else { "Done" };
+                    if primary(ui, label).clicked() {
+                        next = None;
+                        if self.notes.is_empty() {
+                            if let Err(e) = self.new_note("") {
+                                *result = Err(e);
+                            }
+                        }
+                    }
+                } else if primary(ui, "Next").clicked() {
+                    next = Some(step + 1);
+                }
+                if step > 0 && ui.button("Back").clicked() {
+                    next = Some(step - 1);
+                }
+                if ui.add(egui::Button::new(muted("Skip tour")).frame(false)).clicked() {
+                    next = None;
+                }
+            });
+        });
+        self.tour = next;
+    }
+}
+
+/// Plain-language versions of common connection errors.
+fn friendly(e: &anyhow::Error) -> String {
+    let m = format!("{e:#}");
+    if m.contains("Use HTTPS") {
+        "Other computers must be reached over https://. For a server on this computer use http://127.0.0.1:7878. See SERVER_SETUP.md for HTTPS.".into()
+    } else if m.contains("Enter the server token") {
+        "The token must be at least 32 characters. Copy the EMERALD_TOKEN value the server was started with.".into()
+    } else if m.contains("401") {
+        "The server rejected the token. Check it matches EMERALD_TOKEN on the server.".into()
+    } else if m.contains("relative URL") || m.contains("invalid") && m.contains("URL") {
+        "That doesn't look like an address. Start with https:// or http://127.0.0.1:7878.".into()
+    } else if m.contains("connect") || m.contains("timed out") || m.contains("dns") {
+        format!("Couldn't reach the server. Is emerald-server running at that address? ({m})")
+    } else {
+        m
     }
 }

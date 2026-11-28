@@ -57,7 +57,7 @@ The token exists only in that PowerShell session. Keep the window open while the
 
 ## 2. Connect clients on the same computer
 
-The server listens on `127.0.0.1:7878` by default. In Emerald Client, open **Sync settings**, enter `http://127.0.0.1:7878` and the server token, and save. Click **Sync** to transfer notes.
+The server listens on `127.0.0.1:7878` by default. In Emerald Client, open **Settings › Sync** (or click **Sync off** in the bottom bar), enter `http://127.0.0.1:7878` and the server token, press **Test**, then **Connect**. Notes sync automatically from then on.
 
 ## 3. Connect over a network
 
@@ -69,9 +69,41 @@ notes.example.org {
 }
 ```
 
-Allow inbound HTTPS in the host firewall and router if the server is behind NAT. Avoid exposing port 7878 directly to the public internet because the server API uses a bearer token without TLS. In each client, enter `https://notes.example.org` and the same token in **Sync settings**.
+Allow inbound HTTPS in the host firewall and router if the server is behind NAT. Avoid exposing port 7878 directly to the public internet because the server API uses a bearer token without TLS. In each client, enter `https://notes.example.org` and the same token in **Settings › Sync**.
 
 The client requires HTTPS for remote servers. Plain HTTP is permitted only for localhost testing. Give the server process write access to its vault folder and keep backups independently of sync.
+
+### Without a domain name: Tailscale
+
+If your devices are on a [Tailscale](https://tailscale.com) network, Tailscale can provide the HTTPS address for you. On the server machine, with the server running on `127.0.0.1:7878` and HTTPS certificates enabled for your tailnet:
+
+```sh
+tailscale serve --bg 7878
+```
+
+Tailscale prints an address such as `https://server-name.your-tailnet.ts.net`. Enter it in each client. Only devices on your tailnet can reach it.
+
+## Run the server unattended (Linux, systemd)
+
+Instead of keeping a terminal open, run the server as a service. Create a dedicated user and folder, and keep the token in a file only root can read:
+
+```sh
+sudo useradd --system --home /var/lib/emerald --create-home emerald
+sudo install -d -m 700 /etc/emerald
+printf 'EMERALD_TOKEN=%s\n' "$(openssl rand -hex 32)" | sudo tee /etc/emerald/server.env >/dev/null
+sudo chmod 600 /etc/emerald/server.env
+sudo cat /etc/emerald/server.env   # copy the token into each client
+```
+
+Copy `packaging/emerald-server.service` to `/etc/systemd/system/`, then:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now emerald-server
+systemctl status emerald-server
+```
+
+The unit runs `/usr/bin/emerald-server --folder /var/lib/emerald/vault` (the Debian package path) as the `emerald` user. systemd reads the token file as root before starting the service, so the token never appears in the unit or on the command line. Combine it with Caddy or Tailscale above for remote devices.
 
 ## Stop and restart
 

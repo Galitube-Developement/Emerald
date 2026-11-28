@@ -14,13 +14,17 @@ Install the Emerald client package or run `cargo run --locked --bin emerald`. It
 
 | Key | Action |
 | --- | --- |
-| Ctrl+N | New note |
-| Ctrl+O or Ctrl+Shift+F | Search (Enter opens the first hit, Esc closes) |
+| Ctrl+N | New note (the title is selected so you can name it right away) |
+| Ctrl+O or Ctrl+Shift+F | Search notes (Enter opens the first hit, Esc clears) |
+| Ctrl+P or Ctrl+K | Jump to a note or run a command (arrow keys to choose) |
 | Ctrl+G | Toggle graph view |
 | Ctrl+W | Close the current tab |
 | Ctrl+S | Save now (notes also autosave one second after you stop typing) |
+| Ctrl+= / Ctrl+− / Ctrl+0 | Zoom in, out, reset |
 
-Click the note title to rename it. The ... menu next to Edit/Preview holds Save, Rename, Reload from disk and Delete. The vault name and note count are at the bottom left. Backlinks appear on the right only when other notes link to the open one.
+The search box is always at the top of the sidebar, with **New note** and **New folder** below it. Right-click a note for Rename, Move to folder, Duplicate, Copy link, Reveal and Delete; right-click a folder to add a note to it or rename it. Click a note's title to rename it; its folder is shown above as a breadcrumb. Type `[[` to link a note; links can be followed from the links row, from Preview and from the **Linked from** panel on the right. Deleted notes go to the Trash (vault name menu or Ctrl+P) and can be undone from the toast for ten seconds.
+
+The bottom bar holds the vault switcher (click the vault name for recent vaults), the note count, and the sync status. **Settings** (gear icon) has sections for Sync, Appearance (light, dark or match system), Vault and Shortcuts. Open tabs are restored the next time you open the vault.
 
 ### Where things are stored
 
@@ -51,9 +55,9 @@ Both commands start a foreground process on 127.0.0.1:7878. On macOS, open the s
         reverse_proxy 127.0.0.1:7878
     }
 
-In each client, open **Sync settings**, enter the HTTPS address and the same token, save the connection and choose **Sync**. Connected clients sync automatically after five seconds of inactivity and check for server updates every five seconds. For testing on one machine use http://127.0.0.1:7878. The client saves the connection, including the token, in the current user's configuration directory outside the vault. Alternatively supply both EMERALD_SERVER and EMERALD_TOKEN in the client's environment.
+In each client, open **Settings › Sync** (or click **Sync off** in the bottom bar), enter the HTTPS address and the same token, press **Test**, then **Connect**. Connected clients sync automatically after five seconds of inactivity and check for server updates every five seconds; the bottom bar shows when the last sync happened. For testing on one machine use http://127.0.0.1:7878. The client saves the connection, including the token, in the current user's configuration directory outside the vault. Alternatively supply both EMERALD_SERVER and EMERALD_TOKEN in the client's environment.
 
-Sync compares file contents against the last sync, including renames (delete and create), attachments and deletions. A concurrent change rejected by the server can be retried. If both clients edited a note offline, the remote version takes its original name and the local edit gets a conflict filename. Review it in the vault. A subsequent sync transfers the conflict copy. A concurrent deletion and edit preserves the edited content. File transfers support up to 64 MiB per upload. Dot-prefixed paths and symlinks are excluded. Use separate directories for client and server, and a single server process per server vault. The server token grants access to the whole vault. Maintain backups independently of sync.
+Sync compares file contents against the last sync, including renames (delete and create), attachments and deletions. A concurrent change rejected by the server can be retried. If both clients edited a note offline, the remote version takes its original name and the local edit gets a conflict filename. The bottom bar then shows a conflict count; **Settings › Sync** lists each one with **Compare…**, which shows both versions side by side and lets you keep either (the other moves to the Trash) or both. A concurrent deletion and edit preserves the edited content. File transfers support up to 64 MiB per upload. Dot-prefixed paths and symlinks are excluded. Use separate directories for client and server, and a single server process per server vault. The server token grants access to the whole vault. Maintain backups independently of sync.
 
 ## Build packages
 
