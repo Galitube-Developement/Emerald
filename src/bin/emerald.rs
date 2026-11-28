@@ -24,19 +24,24 @@ fn main() -> eframe::Result<()> {
             .unwrap_or_default()
             .join("Emerald")
     });
-    let icon = image::load_from_memory(include_bytes!("../../assets/emerald-256.png"))
-        .expect("valid Emerald app icon")
-        .into_rgba8();
-    let (icon_width, icon_height) = icon.dimensions();
-    let icon = egui::IconData {
-        rgba: icon.into_raw(),
-        width: icon_width,
-        height: icon_height,
+    let viewport = egui::ViewportBuilder::default().with_inner_size([1060., 720.]);
+    // On macOS, the Dock icon comes from the app bundle's AppIcon.icns. Setting a
+    // runtime window icon here overrides it with the generic window PNG in the Dock.
+    #[cfg(not(target_os = "macos"))]
+    let viewport = {
+        let icon = image::load_from_memory(include_bytes!("../../assets/emerald-256.png"))
+            .expect("valid Emerald app icon")
+            .into_rgba8();
+        let (icon_width, icon_height) = icon.dimensions();
+        let icon = egui::IconData {
+            rgba: icon.into_raw(),
+            width: icon_width,
+            height: icon_height,
+        };
+        viewport.with_icon(std::sync::Arc::new(icon))
     };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1060., 720.])
-            .with_icon(std::sync::Arc::new(icon)),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
@@ -497,11 +502,27 @@ impl Notebook {
             Err(e) => Err(e.into()),
         };
         self.pending = None;
+        let active_name = self.doc.name.clone();
+        let active_hash = self.doc.saved.clone();
         self.refresh()?;
-        if self.notes.contains_key(&self.doc.name) {
-            self.load(self.doc.name.clone())?
-        } else {
-            self.doc = Document::default()
+        if !active_name.is_empty() {
+            match self.notes.get(&active_name) {
+                Some(text) if digest(text.as_bytes()) != active_hash => {
+                    // Update the open note only when sync actually changed it. Calling
+                    // load() on every poll steals editor focus and switches away from
+                    // other views, which looks like a brief window flash on Windows.
+                    if !self.doc.dirty {
+                        self.doc.text = text.clone();
+                        self.doc.saved = digest(text.as_bytes());
+                    }
+                }
+                None => {
+                    self.doc = Document::default();
+                    self.title.clear();
+                    self.pick = None;
+                }
+                _ => {}
+            }
         }
         let s = result.inspect_err(|e| self.log_line(format!("sync error: {e:#}")))?;
         self.log_line(format!("sync: {s}"));
@@ -661,7 +682,8 @@ impl eframe::App for Notebook {
             }
         }
         if self.sync_ok && self.pending.is_none() {
-            ctx.request_repaint_after(Duration::from_millis(500));
+            let until_sync = Duration::from_secs(5).saturating_sub(self.last_auto_sync.elapsed());
+            ctx.request_repaint_after(until_sync.max(Duration::from_millis(1)));
         }
         let backlinks: Vec<String> = if self.doc.name.is_empty() {
             Vec::new()

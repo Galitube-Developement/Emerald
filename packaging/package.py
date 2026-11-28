@@ -10,7 +10,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 dist = root / "dist"
 dist.mkdir(exist_ok=True)
-version = "1.2.5"
+version = "1.2.6"
 
 def run(*args):
     subprocess.run(args, check=True)
@@ -55,7 +55,7 @@ def package(binary, stage):
                     shutil.copy2(root / f"assets/emerald-{size*2}.png", iconset / f"icon_{size}x{size}@2x.png")
             run("iconutil", "-c", "icns", iconset, "-o", app / "Resources/AppIcon.icns")
             shutil.rmtree(iconset)
-            (app / "Info.plist").write_bytes(plistlib.dumps(dict(CFBundleExecutable=binary, CFBundleIdentifier="dev.emerald.vault", CFBundlePackageType="APPL", CFBundleName=title, CFBundleVersion=version, CFBundleIconFile="AppIcon")))
+            (app / "Info.plist").write_bytes(plistlib.dumps(dict(CFBundleExecutable=binary, CFBundleIdentifier="dev.emerald.vault", CFBundlePackageType="APPL", CFBundleName=title, CFBundleVersion=version, CFBundleIconFile="AppIcon.icns")))
             os.symlink("/Applications", stage / "Applications")
         else:
             dest = stage / "payload/usr/local/bin"
