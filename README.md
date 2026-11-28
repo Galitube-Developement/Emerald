@@ -10,7 +10,7 @@ A fast, native Markdown notebook written in Rust, plus an optional sync server y
 No account, no cloud lock-in, no telemetry. Just `.md` files you own.
 
 [![Latest release](https://img.shields.io/github/v/release/Galitube-Developement/Emerald?color=2ecc71&label=release)](https://github.com/Galitube-Developement/Emerald/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-2ecc71)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ecc71)](LICENSE.md)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust)](https://www.rust-lang.org)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-555)
 
@@ -187,7 +187,7 @@ On Windows use Python and WiX 5 on PATH. On macOS the script uses pkgbuild and h
 
 <div align="center">
 
-Made with 💚 by **Galitube Productions** · MIT licensed
+Made with 💚 by **Galitube Productions** · [MIT licensed](LICENSE.md)
 
 If Emerald makes your notes feel like *yours* again, consider giving the repo a ⭐
 
