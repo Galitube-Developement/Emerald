@@ -55,9 +55,24 @@ Then start the server:
 
 The token exists only in that PowerShell session. Keep the window open while the server runs. For unattended startup, store the token in a protected service-manager secret or credential store. Do not put it in a script or share it.
 
+## Several vaults on one server
+
+One server can hold several vaults. The folder passed with `--folder` is laid out like this:
+
+```text
+EmeraldVault/              ← --folder
+├── Vaults/
+│   ├── Work/              ← vault "Work" and its subfolders
+│   │   └── Projects/Plan.md
+│   └── Personal/
+└── (main vault files)     ← used when a client leaves "Server vault" empty
+```
+
+Clients create vaults for you: **Settings › Vaults › Import a folder…** uploads a folder from that computer into `Vaults/<name>/`, and **Open from server…** downloads one on another computer. All vaults on a server share its token. Emerald 2.0 clients keep using the main vault.
+
 ## 2. Connect clients on the same computer
 
-The server listens on `127.0.0.1:7878` by default. In Emerald Client, open **Settings › Sync** (or click **Sync off** in the bottom bar), enter `http://127.0.0.1:7878` and the server token, press **Test**, then **Connect**. Notes sync automatically from then on.
+The server listens on `127.0.0.1:7878` by default. In Emerald Client, open **Settings › Sync** (or click **Sync off** in the bottom bar), enter `http://127.0.0.1:7878` and the server token, optionally a **Server vault** name, press **Test**, then **Connect**. Notes sync automatically from then on.
 
 ## 3. Connect over a network
 
