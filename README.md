@@ -59,6 +59,7 @@ Prefer to build it yourself? `cargo run --locked --bin emerald` works too.
 ## ✨ Features
 
 - 🚀 **Native and lightweight.** A real Rust desktop window (egui), not a browser in disguise. It starts fast and stays small.
+- 🗂️ **Several vaults, one server.** Keep work, personal and project notes in separate vaults. Import a folder you already have and Emerald uploads it to your server, or download a server vault on another computer.
 - 📂 **Your folder is the database.** Notes live in `Documents/Emerald` by default, or any folder you choose with `--vault`. Use Git, Dropbox or another editor alongside Emerald.
 - 🔗 **Linked thinking.** Type `[[` to link notes. Follow links from the links row, from Preview, or from the **Linked from** backlinks panel.
 - 🕸️ **Graph view.** See how your notes connect with Ctrl+G.
@@ -80,6 +81,17 @@ Install the Emerald client package or run `cargo run --locked --bin emerald`. It
 ```bash
 emerald --vault "/path/to/notes"
 ```
+
+### 🗂️ Multiple vaults and importing a folder
+
+On first launch Emerald asks how you want to start: with an empty vault, by **importing an existing folder**, or by **opening a vault from your server**. The same options are in **Settings › Vaults** and in the vault menu in the bottom bar, so you can add vaults at any time.
+
+- **Import a folder…** Pick a folder of notes on this computer (for example an existing Markdown or Obsidian folder). Emerald checks every file first and lists any it can't sync, such as names containing `? * : |` or files over 64 MB. The folder stays where it is: nothing is moved or copied locally. With **Upload to my sync server** checked, it is uploaded to the server as its own vault and kept in sync.
+- **Open from server…** Lists the vaults on your server and downloads the one you pick into a new folder (by default `Documents/Emerald Vaults/<name>`). Use this on your second computer.
+- **New vault…** Creates an empty vault, optionally synced as a new server vault.
+- **Your vaults** lists every vault you've opened. Click **Open** to switch, or **Remove** to drop it from the list (its folder is kept).
+
+On the server each vault is a folder: `<server folder>/Vaults/<vault name>/…` with the vault's own subfolders inside. Every vault on one server shares the same token.
 
 <a id="shortcuts"></a>
 
@@ -109,7 +121,8 @@ Create notes using paths such as `Projects/Ideas`. Save with Ctrl+S or Cmd+S. Pr
 ### 📁 Where things are stored
 
 - **Vault:** the folder passed with `--vault` (default Documents/Emerald). Notes are plain `.md` files.
-- **Sync connection:** `%APPDATA%/Emerald/<hash>.json` on Windows (the platform config dir elsewhere), or the `EMERALD_SERVER` and `EMERALD_TOKEN` environment variables.
+- **Sync connection:** `%APPDATA%/Emerald/<hash>.json` on Windows (the platform config dir elsewhere), one per vault, or the `EMERALD_SERVER`, `EMERALD_TOKEN` and optional `EMERALD_VAULT` environment variables (these apply to every vault).
+- **Vault list:** `app.json` in the same configuration folder.
 - **Sync state:** `.emerald-sync-*.json` inside the vault.
 
 ---
@@ -145,7 +158,7 @@ notes.example.org {
 }
 ```
 
-In each client, open **Settings › Sync** (or click **Sync off** in the bottom bar), enter the HTTPS address and the same token, press **Test**, then **Connect**. Connected clients sync automatically after five seconds of inactivity and check for server updates every five seconds; the bottom bar shows when the last sync happened. For testing on one machine use http://127.0.0.1:7878. The client saves the connection, including the token, in the current user's configuration directory outside the vault. Alternatively supply both EMERALD_SERVER and EMERALD_TOKEN in the client's environment.
+In each client, open **Settings › Sync** (or click **Sync off** in the bottom bar), enter the HTTPS address and the same token, optionally a **Server vault** name (leave it empty for the server's main vault; **Test** lists the existing ones), press **Test**, then **Connect**. To bring a folder you already have onto the server, use **Settings › Vaults › Import a folder…** instead. Connected clients sync automatically after five seconds of inactivity and check for server updates every five seconds; the bottom bar shows when the last sync happened. For testing on one machine use http://127.0.0.1:7878. The client saves the connection, including the token, in the current user's configuration directory outside the vault. Alternatively supply both EMERALD_SERVER and EMERALD_TOKEN in the client's environment.
 
 <details>
 <summary><b>How sync handles conflicts, deletions and limits</b></summary>
@@ -155,7 +168,8 @@ Sync compares file contents against the last sync, including renames (delete and
 - File transfers support up to 64 MiB per upload.
 - Dot-prefixed paths and symlinks are excluded.
 - Use separate directories for client and server, and a single server process per server vault.
-- The server token grants access to the whole vault.
+- The server token grants access to every vault on that server. Use a separate server instance and token if you need isolation.
+- On the server, the top-level `Vaults` folder holds the named vaults. The main vault (used by clients that leave **Server vault** empty, and by Emerald 2.0) can't contain a top-level folder with that name.
 - Maintain backups independently of sync.
 
 </details>

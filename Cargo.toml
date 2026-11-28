@@ -1,6 +1,6 @@
 [package]
 name = "emerald"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Galitube Productions"]
@@ -25,6 +25,7 @@ egui_extras = { version = "0.31", default-features = false, features = ["svg"] }
 egui_commonmark = { version = "0.20", default-features = false }
 chrono = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
+rfd = "0.15"
 
 [target.'cfg(windows)'.dependencies]
 eframe = { version = "0.31", default-features = false, features = ["wgpu"] }

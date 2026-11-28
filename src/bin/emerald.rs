@@ -27,6 +27,7 @@ struct Args {
 fn main() -> eframe::Result<()> {
     let args = Args::parse();
     let verbose = args.verbose;
+    let first_run = args.vault.is_none() && prefs_file().is_some_and(|p| !p.exists());
     let path = args.vault.unwrap_or_else(|| {
         dirs::document_dir()
             .or_else(dirs::home_dir)
@@ -64,7 +65,11 @@ fn main() -> eframe::Result<()> {
             let mut app = Notebook::new(path)?;
             app.show_log = verbose;
             let flag = app.vault.root.join(".emerald-tour");
-            if !flag.exists() {
+            if first_run {
+                // Offer to import a folder or download a server vault before the tour.
+                app.welcome = true;
+                let _ = fs::write(flag, "");
+            } else if !flag.exists() {
                 app.tour = Some(0);
                 let _ = fs::write(flag, "");
             }
@@ -426,6 +431,24 @@ mod tests {
         assert_eq!(trash_entry("junk.md"), None);
     }
     #[test]
+    fn import_scan_lists_files_that_cannot_sync() {
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("Projects")).unwrap();
+        fs::create_dir_all(d.path().join(".obsidian")).unwrap();
+        fs::write(d.path().join("Projects/Plan.md"), "# Plan").unwrap();
+        fs::write(d.path().join("photo.png"), [0u8, 159, 146, 150]).unwrap();
+        fs::write(d.path().join(".obsidian/app.json"), "{}").unwrap();
+        fs::write(d.path().join("Latin1.md"), [0x63u8, 0x61, 0x66, 0xe9]).unwrap();
+        let s = scan_folder(d.path()).unwrap();
+        assert_eq!((s.notes, s.files), (1, 2));
+        assert_eq!(s.problems, vec!["Latin1.md: not UTF-8 text".to_owned()]);
+        if cfg!(unix) {
+            fs::write(d.path().join("What?.md"), "x").unwrap();
+            assert_eq!(scan_folder(d.path()).unwrap().problems.len(), 2);
+        }
+        assert!(scan_folder(&d.path().join("missing")).is_err());
+    }
+    #[test]
     fn fuzzy_prefers_contiguous_matches() {
         assert!(fuzzy("Website redesign", "web").unwrap() > fuzzy("Weekly sync", "wey").unwrap_or(-1));
         assert!(fuzzy("Kickoff", "kff").is_some());
@@ -492,9 +515,49 @@ enum Section {
     #[default]
     Sync,
     Appearance,
-    Vault,
+    Vaults,
     Shortcuts,
 }
+#[derive(PartialEq, Clone, Copy)]
+enum SetupKind {
+    /// Create a new, empty local vault.
+    New,
+    /// Use an existing folder on this computer and upload it to the server.
+    Import,
+    /// Download a vault that already exists on the server.
+    Server,
+}
+/// What a pre-import scan of a folder found.
+struct Scan {
+    files: usize,
+    notes: usize,
+    bytes: u64,
+    problems: Vec<String>,
+}
+/// The "New vault", "Import folder" and "Open from server" window.
+struct VaultSetup {
+    kind: SetupKind,
+    folder: String,
+    name: String,
+    name_edited: bool,
+    folder_edited: bool,
+    sync: bool,
+    /// Reuse the server address and token of the vault that is open now.
+    same_server: bool,
+    server: String,
+    token: String,
+    remote: Option<Vec<String>>,
+    list_rx: Option<mpsc::Receiver<Result<Vec<String>>>>,
+    scan: Option<(String, Scan)>,
+    msg: Option<String>,
+    job: Option<mpsc::Receiver<Result<()>>>,
+    /// The connection the running job is preparing.
+    pending: Option<(PathBuf, sync::Connection)>,
+    /// Opened from the first-launch welcome window.
+    from_welcome: bool,
+}
+/// A connection test's message, and the server's named vaults when it lists them.
+type TestResult = (String, Option<Vec<String>>);
 #[derive(PartialEq)]
 enum SyncState {
     Off,
@@ -641,14 +704,18 @@ struct Notebook {
     pal_query: String,
     pal_sel: usize,
     vault_win: Option<String>,
+    setup: Option<VaultSetup>,
+    welcome: bool,
     tour: Option<usize>,
     tour_rects: [Option<Rect>; 4],
     settings: Option<Section>,
     edit_server: bool,
     server: String,
+    server_vault: String,
+    server_vaults: Option<Vec<String>>,
     secret: String,
     show_secret: bool,
-    test_rx: Option<mpsc::Receiver<Result<String>>>,
+    test_rx: Option<mpsc::Receiver<Result<TestResult>>>,
     test_msg: Option<(bool, String)>,
     trash: bool,
     trash_confirm: Option<String>,
@@ -673,7 +740,6 @@ impl Notebook {
         let canon = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         prefs.recent.retain(|p| p != &canon);
         prefs.recent.insert(0, canon);
-        prefs.recent.truncate(8);
         save_json(prefs_file(), &prefs);
         let session: Session = load_json(session_file(&path));
         let mut app = Self {
@@ -716,11 +782,15 @@ impl Notebook {
             pal_query: String::new(),
             pal_sel: 0,
             vault_win: None,
+            setup: None,
+            welcome: false,
             tour: None,
             tour_rects: [None; 4],
             settings: None,
             edit_server: false,
             server: String::new(),
+            server_vault: String::new(),
+            server_vaults: None,
             secret: String::new(),
             show_secret: false,
             test_rx: None,
@@ -1590,6 +1660,14 @@ impl eframe::App for Notebook {
                             self.vault_win = Some(self.vault.root.display().to_string());
                             ui.close_menu();
                         }
+                        if ui.button("Import a folder…").clicked() {
+                            self.start_setup(SetupKind::Import);
+                            ui.close_menu();
+                        }
+                        if ui.button("Manage vaults…").clicked() {
+                            self.settings = Some(Section::Vaults);
+                            ui.close_menu();
+                        }
                         if !vaults.is_empty() {
                             ui.label(muted("Recent vaults"));
                             for v in &vaults {
@@ -1937,6 +2015,8 @@ impl eframe::App for Notebook {
         self.compare_window(ctx, &mut result);
         self.undo_toast(ctx, &mut result);
         self.vault_window(ctx);
+        self.welcome_window(ctx);
+        self.setup_window(ctx);
         self.tour_window(ctx, &mut result);
         if self.show_log {
             let mut win = true;
@@ -2103,6 +2183,10 @@ impl Notebook {
             }
             "log" => self.show_log = true,
             "vault" => self.vault_win = Some(self.vault.root.display().to_string()),
+            "vault-new" => self.start_setup(SetupKind::New),
+            "vault-import" => self.start_setup(SetupKind::Import),
+            "vault-server" => self.start_setup(SetupKind::Server),
+            "vaults" => self.settings = Some(Section::Vaults),
             "trash" => self.trash = true,
             "tour" => self.tour = Some(0),
             "shortcuts" => self.settings = Some(Section::Shortcuts),
@@ -2139,6 +2223,10 @@ impl Notebook {
             ("Settings".into(), "", "settings"),
             ("Switch light / dark theme".into(), "", "theme"),
             ("Open another vault…".into(), "", "vault"),
+            ("New vault…".into(), "", "vault-new"),
+            ("Import a folder as a vault…".into(), "", "vault-import"),
+            ("Open a vault from the server…".into(), "", "vault-server"),
+            ("Manage vaults".into(), "", "vaults"),
             ("Show trash".into(), "", "trash"),
             ("Show log".into(), "", "log"),
             ("Keyboard shortcuts".into(), "", "shortcuts"),
@@ -2251,7 +2339,7 @@ impl Notebook {
         let mut open = true;
         egui::Window::new("Settings").open(&mut open).collapsible(false).default_width(500.).anchor(egui::Align2::CENTER_TOP, [0., 60.]).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                for (s, l) in [(Section::Sync, "Sync"), (Section::Appearance, "Appearance"), (Section::Vault, "Vault"), (Section::Shortcuts, "Shortcuts")] {
+                for (s, l) in [(Section::Sync, "Sync"), (Section::Appearance, "Appearance"), (Section::Vaults, "Vaults"), (Section::Shortcuts, "Shortcuts")] {
                     ui.selectable_value(&mut section, s, l);
                 }
             });
@@ -2286,34 +2374,7 @@ impl Notebook {
                         ui.label(muted("Ctrl+= / Ctrl+− / Ctrl+0"));
                     });
                 }
-                Section::Vault => {
-                    ui.label("This vault");
-                    ui.label(muted(self.vault.root.display().to_string()));
-                    ui.horizontal(|ui| {
-                        if ui.button("Reveal in file manager").clicked() {
-                            reveal(&self.vault.root);
-                        }
-                        if ui.button("Open another vault…").clicked() {
-                            self.vault_win = Some(self.vault.root.display().to_string());
-                        }
-                        if ui.button("Trash…").clicked() {
-                            self.trash = true;
-                        }
-                    });
-                    let recent: Vec<PathBuf> = self.prefs.recent.iter().skip(1).cloned().collect();
-                    if !recent.is_empty() {
-                        ui.add_space(8.);
-                        ui.label("Recent vaults");
-                        for v in recent {
-                            ui.horizontal(|ui| {
-                                ui.label(v.display().to_string());
-                                if ui.small_button("Open").clicked() {
-                                    self.vault_win = Some(v.display().to_string());
-                                }
-                            });
-                        }
-                    }
-                }
+                Section::Vaults => self.vaults_section(ui),
                 Section::Shortcuts => {
                     egui::Grid::new("keys").num_columns(2).spacing([24., 6.]).show(ui, |ui| {
                         for (k, d) in [
@@ -2336,7 +2397,8 @@ impl Notebook {
             }
             let _ = p;
         });
-        self.settings = open.then_some(section);
+        // Opening a vault setup window replaces Settings.
+        self.settings = (open && self.setup.is_none()).then_some(section);
         if !open {
             self.secret.clear();
             self.edit_server = false;
@@ -2346,7 +2408,7 @@ impl Notebook {
     fn sync_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, result: &mut Result<()>) {
         let p = pal();
         let current = sync::current(&self.vault);
-        if let (Some((server, env)), false) = (&current, self.edit_server) {
+        if let (Some((server, remote_vault, env)), false) = (&current, self.edit_server) {
             let (txt, col) = match &self.sync_state {
                 SyncState::Syncing => ("Syncing…".to_owned(), p.muted),
                 SyncState::Error(e) => (format!("Last sync failed: {e}"), p.red),
@@ -2354,8 +2416,9 @@ impl Notebook {
             };
             ui.label(egui::RichText::new(txt).color(col));
             ui.label(format!("Server: {server}"));
+            ui.label(format!("Server vault: {}", remote_vault.as_deref().unwrap_or("main vault")));
             if *env {
-                ui.label(muted("Set by the EMERALD_SERVER and EMERALD_TOKEN environment variables."));
+                ui.label(muted("Set by the EMERALD_SERVER, EMERALD_TOKEN and EMERALD_VAULT environment variables."));
             }
             ui.label(muted("Changes sync automatically every few seconds while Emerald is open."));
             ui.add_space(6.);
@@ -2368,6 +2431,8 @@ impl Notebook {
                 if !env && ui.button("Change server…").clicked() {
                     self.edit_server = true;
                     self.server = server.clone();
+                    self.server_vault = remote_vault.clone().unwrap_or_default();
+                    self.server_vaults = None;
                     self.test_msg = None;
                 }
                 if !env && ui.button("Disconnect").on_hover_text("Stop syncing this vault. Your notes stay on this computer.").clicked() {
@@ -2415,22 +2480,50 @@ impl Notebook {
             ui.checkbox(&mut self.show_secret, "Show");
         });
         ui.label(egui::RichText::new(format!("The EMERALD_TOKEN value, at least 32 characters ({} typed).", self.secret.chars().count())).small().color(p.muted));
+        ui.add_space(4.);
+        ui.label("Server vault");
+        ui.add(egui::TextEdit::singleline(&mut self.server_vault).hint_text(muted("Empty: the server's main vault")).desired_width(300.));
+        if let Some(list) = &self.server_vaults {
+            if list.is_empty() {
+                ui.label(egui::RichText::new("The server has no named vaults yet. Type a name to create one.").small().color(p.muted));
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("On the server:").small().color(p.muted));
+                    for n in list {
+                        if ui.selectable_label(self.server_vault.trim() == n, n.as_str()).clicked() {
+                            self.server_vault = n.clone();
+                        }
+                    }
+                });
+            }
+        } else {
+            ui.label(egui::RichText::new("Each server can hold several vaults. Press Test to list them.").small().color(p.muted));
+        }
         ui.add_space(6.);
         ui.horizontal(|ui| {
             let testing = self.test_rx.is_some();
             if ui.add_enabled(!testing, egui::Button::new(if testing { "Testing…" } else { "Test" })).clicked() {
                 let (tx, rx) = mpsc::channel();
                 let (s, t) = (self.server.trim().to_owned(), self.secret.trim().to_owned());
+                let v = self.server_vault.trim().to_owned();
                 let c = ctx.clone();
                 self.test_msg = None;
                 self.test_rx = Some(rx);
                 std::thread::spawn(move || {
-                    let _ = tx.send(sync::test(&s, &t));
+                    let r = sync::test(&s, &t, Some(&v)).map(|m| (m, sync::vaults(&s, &t).ok()));
+                    let _ = tx.send(r);
                     c.request_repaint();
                 });
             }
             if primary(ui, "Connect").clicked() {
-                match sync::configure(&self.vault, sync::Connection { server: self.server.trim().to_owned(), token: self.secret.trim().to_owned() }) {
+                let vault = Some(self.server_vault.trim().to_owned()).filter(|n| !n.is_empty());
+                let c = sync::Connection { server: self.server.trim().to_owned(), token: self.secret.trim().to_owned(), vault };
+                let created = match &c.vault {
+                    // Named vaults are created on first connect, so they show up for other clients.
+                    Some(n) => sync::create_vault(&c.server, &c.token, n),
+                    None => Ok(()),
+                };
+                match created.and_then(|_| sync::configure(&self.vault, c)) {
                     Ok(()) => {
                         self.secret.clear();
                         self.edit_server = false;
@@ -2452,7 +2545,10 @@ impl Notebook {
         if let Some(rx) = &self.test_rx {
             if let Ok(r) = rx.try_recv() {
                 self.test_msg = Some(match r {
-                    Ok(m) => (true, format!("{m} Press Connect to start syncing.")),
+                    Ok((m, list)) => {
+                        self.server_vaults = list;
+                        (true, format!("{m} Press Connect to start syncing."))
+                    }
                     Err(e) => (false, friendly(&e)),
                 });
                 self.test_rx = None;
@@ -2730,19 +2826,9 @@ impl Notebook {
                 self.vault_win = Some(path);
                 return;
             }
-            if let Err(e) = self.save() {
-                self.fail(e);
-                return;
-            }
             let p = PathBuf::from(path.trim());
-            match fs::create_dir_all(&p).map_err(Into::into).and_then(|_| Notebook::new(p)) {
-                Ok(mut nb) => {
-                    nb.log = std::mem::take(&mut self.log);
-                    nb.show_log = self.show_log;
-                    nb.say("Vault opened");
-                    *self = nb;
-                }
-                Err(e) => self.fail(e),
+            if let Err(e) = fs::create_dir_all(&p).map_err(Into::into).and_then(|_| self.switch_to(p, false)) {
+                self.fail(e);
             }
         } else if keep {
             self.vault_win = Some(path)
@@ -2753,6 +2839,9 @@ impl Notebook {
         let Some(step) = self.tour else {
             return;
         };
+        if self.welcome || self.setup.is_some() {
+            return;
+        }
         const STEPS: [(&str, &str); 4] = [
             ("Switch views", "These icons open Files, Search, the Graph and today's Daily note. Settings and sync live at the bottom."),
             ("Your notes", "Search is always at the top. New note and New folder are right below it. Right-click a note or folder for more."),
@@ -2802,6 +2891,537 @@ impl Notebook {
             });
         });
         self.tour = next;
+    }
+}
+
+// ---------------------------------------------------------------- vaults
+
+/// Where new and downloaded vaults go by default: `Documents/Emerald Vaults/<name>`.
+fn vaults_home() -> PathBuf {
+    dirs::document_dir().or_else(dirs::home_dir).unwrap_or_default().join("Emerald Vaults")
+}
+fn pick_folder(start: &str) -> Option<PathBuf> {
+    let mut d = rfd::FileDialog::new();
+    let start = Path::new(start.trim());
+    if let Some(dir) = start.ancestors().find(|a| a.is_dir()) {
+        d = d.set_directory(dir);
+    }
+    d.pick_folder()
+}
+fn is_empty_dir(p: &Path) -> bool {
+    match fs::read_dir(p) {
+        Ok(mut d) => d.next().is_none(),
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+fn human_size(b: u64) -> String {
+    match b {
+        0..=1023 => format!("{b} B"),
+        1024..=1_048_575 => format!("{:.0} KB", b as f64 / 1024.),
+        _ => format!("{:.1} MB", b as f64 / 1_048_576.),
+    }
+}
+/// Check that every file in a folder can be opened and synced, before importing it.
+fn scan_folder(root: &Path) -> Result<Scan> {
+    ensure!(root.is_dir(), "Choose a folder that exists on this computer");
+    let mut s = Scan { files: 0, notes: 0, bytes: 0, problems: Vec::new() };
+    let entries = walkdir::WalkDir::new(root)
+        .min_depth(1)
+        .into_iter()
+        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.'));
+    for entry in entries {
+        let e = match entry {
+            Ok(e) => e,
+            Err(err) => {
+                s.problems.push(err.to_string());
+                continue;
+            }
+        };
+        let rel = e.path().strip_prefix(root).unwrap_or(e.path());
+        let Some(n) = rel.to_str().map(|n| n.replace(std::path::MAIN_SEPARATOR, "/")) else {
+            s.problems.push(format!("{}: the name isn't valid Unicode", rel.display()));
+            continue;
+        };
+        if e.path_is_symlink() {
+            s.problems.push(format!("{n}: symbolic links can't be synced"));
+            continue;
+        }
+        if !e.file_type().is_file() {
+            continue;
+        }
+        if target(root, &n).is_err() {
+            s.problems.push(format!("{n}: rename it without < > : \" \\ | ? * and without a dot or space at the end"));
+            continue;
+        }
+        let len = e.metadata().map(|m| m.len()).unwrap_or(0);
+        if len > 64 * 1024 * 1024 {
+            s.problems.push(format!("{n}: larger than the 64 MB sync limit"));
+            continue;
+        }
+        if n.ends_with(".md") {
+            if fs::read_to_string(e.path()).is_err() {
+                s.problems.push(format!("{n}: not UTF-8 text"));
+                continue;
+            }
+            s.notes += 1;
+        }
+        s.files += 1;
+        s.bytes += len;
+    }
+    Ok(s)
+}
+
+impl Notebook {
+    /// Open another vault in place of this one.
+    fn switch_to(&mut self, p: PathBuf, sync_now: bool) -> Result<()> {
+        ensure!(!self.busy(), "Wait for sync to finish, then switch vaults");
+        self.save()?;
+        let mut nb = Notebook::new(p)?;
+        nb.log = std::mem::take(&mut self.log);
+        nb.show_log = self.show_log;
+        if sync_now && nb.sync_state != SyncState::Off {
+            nb.last_auto_sync = Instant::now() - Duration::from_secs(60);
+        }
+        nb.say("Vault opened");
+        *self = nb;
+        Ok(())
+    }
+    fn start_setup(&mut self, kind: SetupKind) {
+        let from_env = sync::current(&self.vault).is_some_and(|c| c.2);
+        let has_server = sync::connection(&self.vault).is_some() && !from_env;
+        let mut st = VaultSetup {
+            kind,
+            folder: String::new(),
+            name: String::new(),
+            name_edited: false,
+            folder_edited: false,
+            sync: kind != SetupKind::New || has_server,
+            same_server: has_server,
+            server: String::new(),
+            token: String::new(),
+            remote: None,
+            list_rx: None,
+            scan: None,
+            msg: None,
+            job: None,
+            pending: None,
+            from_welcome: std::mem::take(&mut self.welcome),
+        };
+        if kind != SetupKind::Import {
+            st.folder = vaults_home().display().to_string();
+        }
+        if kind == SetupKind::Server && has_server {
+            self.list_remote(&mut st);
+        }
+        self.settings = None;
+        self.setup = Some(st);
+    }
+    /// The connection a setup would use, without its vault name.
+    fn setup_connection(&self, st: &VaultSetup) -> Result<sync::Connection> {
+        if st.same_server {
+            let mut c = sync::connection(&self.vault).ok_or_else(|| anyhow::anyhow!("This vault isn't connected to a server"))?;
+            c.vault = None;
+            Ok(c)
+        } else {
+            Ok(sync::Connection { server: st.server.trim().to_owned(), token: st.token.trim().to_owned(), vault: None })
+        }
+    }
+    fn list_remote(&self, st: &mut VaultSetup) {
+        match self.setup_connection(st) {
+            Ok(c) => {
+                let (tx, rx) = mpsc::channel();
+                st.list_rx = Some(rx);
+                st.msg = None;
+                std::thread::spawn(move || {
+                    let _ = tx.send(sync::vaults(&c.server, &c.token));
+                });
+            }
+            Err(e) => st.msg = Some(friendly(&e)),
+        }
+    }
+    /// Check the form and start the server part of a setup in the background.
+    fn begin_setup(&self, st: &mut VaultSetup, ctx: &egui::Context) -> Result<()> {
+        let folder = PathBuf::from(st.folder.trim());
+        ensure!(!st.folder.trim().is_empty(), "Choose a folder");
+        ensure!(st.kind == SetupKind::Import || !st.name.trim().is_empty(), "Enter a name for the vault");
+        match st.kind {
+            SetupKind::Import => {
+                let scan = scan_folder(&folder)?;
+                let bad = !scan.problems.is_empty();
+                st.scan = Some((st.folder.trim().to_owned(), scan));
+                ensure!(!bad, "Fix the files listed above, then import again");
+            }
+            SetupKind::New | SetupKind::Server => {
+                ensure!(is_empty_dir(&folder), "That folder already has files in it. Choose a new or empty folder");
+            }
+        }
+        let mut c = if st.sync { Some(self.setup_connection(st)?) } else { None };
+        if let Some(c) = &mut c {
+            c.vault = Some(emerald::vault_name(&st.name)?.to_owned());
+        }
+        let (tx, rx) = mpsc::channel();
+        let kind = st.kind;
+        let job = c.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let r = (|| -> Result<()> {
+                let Some(c) = job else { return Ok(()) };
+                let name = c.vault.clone().unwrap_or_default();
+                let list = sync::vaults(&c.server, &c.token)?;
+                let exists = list.iter().any(|n| n.eq_ignore_ascii_case(&name));
+                if kind == SetupKind::Server {
+                    ensure!(exists, "The server has no vault named \"{name}\"");
+                } else {
+                    ensure!(!exists, "The server already has a vault named \"{name}\". Choose another name, or use Open from server to download it");
+                    sync::create_vault(&c.server, &c.token, &name)?;
+                }
+                Ok(())
+            })();
+            let _ = tx.send(r);
+            ctx.request_repaint();
+        });
+        st.job = Some(rx);
+        st.pending = Some((folder, c.unwrap_or(sync::Connection { server: String::new(), token: String::new(), vault: None })));
+        Ok(())
+    }
+    /// The server is ready: save the connection and open the vault.
+    fn finish_setup(&mut self, st: VaultSetup) -> Result<()> {
+        let (folder, c) = st.pending.ok_or_else(|| anyhow::anyhow!("Nothing to set up"))?;
+        fs::create_dir_all(&folder)?;
+        if st.sync {
+            sync::configure(&Vault::new(folder.clone(), String::new())?, c)?;
+        }
+        let old = self.vault.root.clone();
+        let old_empty = index(&old).map(|i| i.is_empty()).unwrap_or(false);
+        self.switch_to(folder, true)?;
+        if st.from_welcome {
+            // The empty default vault made on first launch is no longer needed.
+            if old_empty && old != self.vault.root {
+                let _ = fs::remove_file(old.join(".emerald-tour"));
+                if fs::remove_dir(&old).is_ok() {
+                    self.prefs.recent.retain(|p| p != &old);
+                    save_json(prefs_file(), &self.prefs);
+                }
+            }
+            let _ = fs::write(self.vault.root.join(".emerald-tour"), "");
+            self.tour = Some(0);
+        }
+        self.say(match st.kind {
+            SetupKind::Import if st.sync => "Folder imported. Uploading it to the server…",
+            SetupKind::Import => "Folder opened as a vault",
+            SetupKind::Server => "Downloading the vault from the server…",
+            SetupKind::New => "Vault created",
+        });
+        Ok(())
+    }
+
+    fn vaults_section(&mut self, ui: &mut egui::Ui) {
+        let p = pal();
+        ui.label(egui::RichText::new("This vault").strong());
+        ui.label(muted(self.vault.root.display().to_string()));
+        match sync::current(&self.vault) {
+            Some((server, v, _)) => ui.label(muted(format!("Synced with {} on {server}", v.map(|v| format!("\"{v}\"")).unwrap_or_else(|| "the main vault".into())))),
+            None => ui.label(muted("Not synced")),
+        };
+        ui.horizontal(|ui| {
+            if ui.button("Reveal in file manager").clicked() {
+                reveal(&self.vault.root);
+            }
+            if ui.button("Trash…").clicked() {
+                self.trash = true;
+            }
+        });
+        ui.add_space(10.);
+        ui.label(egui::RichText::new("Add a vault").strong());
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Import a folder…").on_hover_text("Use a folder of notes from this computer and upload it to your server").clicked() {
+                self.start_setup(SetupKind::Import);
+            }
+            if ui.button("Open from server…").on_hover_text("Download a vault that is already on your server").clicked() {
+                self.start_setup(SetupKind::Server);
+            }
+            if ui.button("New vault…").clicked() {
+                self.start_setup(SetupKind::New);
+            }
+            if ui.button("Open a folder…").clicked() {
+                self.vault_win = Some(self.vault.root.display().to_string());
+            }
+        });
+        ui.add_space(10.);
+        ui.label(egui::RichText::new("Your vaults").strong());
+        let mut remove = None;
+        egui::ScrollArea::vertical().max_height(260.).show(ui, |ui| {
+            for v in self.prefs.recent.clone() {
+                let here = v == self.vault.root;
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        let name = v.file_name().map_or_else(|| v.display().to_string(), |n| n.to_string_lossy().into_owned());
+                        ui.label(egui::RichText::new(name).color(if here { p.accent } else { p.text }));
+                        ui.label(egui::RichText::new(v.display().to_string()).small().color(p.muted));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if here {
+                            ui.label(muted("open"));
+                        } else {
+                            if ui.small_button("Remove").on_hover_text("Remove from this list. The folder and its notes stay where they are.").clicked() {
+                                remove = Some(v.clone());
+                            }
+                            if ui.small_button("Open").clicked() {
+                                self.vault_win = Some(v.display().to_string());
+                            }
+                        }
+                    });
+                });
+            }
+        });
+        if let Some(v) = remove {
+            self.prefs.recent.retain(|p| p != &v);
+            save_json(prefs_file(), &self.prefs);
+        }
+    }
+
+    fn welcome_window(&mut self, ctx: &egui::Context) {
+        if !self.welcome {
+            return;
+        }
+        let mut pick = None;
+        egui::Window::new("Welcome to Emerald").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0., 0.]).fixed_size([420., 0.]).show(ctx, |ui| {
+            ui.label("How do you want to start?");
+            ui.add_space(8.);
+            let mut choice = |ui: &mut egui::Ui, title: &str, text: &str, k: Option<SetupKind>, main: bool| {
+                let r = if main { primary(ui, title) } else { ui.button(title) };
+                if r.clicked() {
+                    pick = Some(k);
+                }
+                ui.label(muted(text));
+                ui.add_space(6.);
+            };
+            choice(ui, "Start with an empty vault", &format!("Notes go in {}.", self.vault.root.display()), None, true);
+            choice(ui, "Import an existing folder…", "Use a folder of Markdown notes from this computer. Emerald can upload it to your sync server.", Some(SetupKind::Import), false);
+            choice(ui, "Open a vault from my server…", "Download a vault you already keep on an Emerald Server.", Some(SetupKind::Server), false);
+            ui.label(egui::RichText::new("You can add more vaults later in Settings › Vaults.").small().color(pal().muted));
+        });
+        match pick {
+            Some(None) => {
+                self.welcome = false;
+                self.tour = Some(0);
+            }
+            Some(Some(k)) => self.start_setup(k),
+            None => {}
+        }
+    }
+
+    fn setup_window(&mut self, ctx: &egui::Context) {
+        let Some(mut st) = self.setup.take() else {
+            return;
+        };
+        let p = pal();
+        // Background results.
+        if let Some(rx) = &st.list_rx {
+            if let Ok(r) = rx.try_recv() {
+                st.list_rx = None;
+                match r {
+                    Ok(list) => st.remote = Some(list),
+                    Err(e) => st.msg = Some(friendly(&e)),
+                }
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+        if let Some(rx) = &st.job {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    st.job = None;
+                    let back = st.from_welcome;
+                    if let Err(e) = self.finish_setup(st) {
+                        self.fail(&e);
+                        self.welcome = back;
+                    }
+                    return;
+                }
+                Ok(Err(e)) => {
+                    st.job = None;
+                    st.pending = None;
+                    st.msg = Some(friendly(&e));
+                }
+                Err(_) => ctx.request_repaint_after(Duration::from_millis(100)),
+            }
+        }
+        let working = st.job.is_some();
+        let from_env = sync::current(&self.vault).is_some_and(|c| c.2);
+        let has_server = sync::connection(&self.vault).is_some() && !from_env;
+        let current_server = sync::current(&self.vault).map(|c| c.0).unwrap_or_default();
+        let title = match st.kind {
+            SetupKind::New => "New vault",
+            SetupKind::Import => "Import a folder",
+            SetupKind::Server => "Open a vault from the server",
+        };
+        let mut keep = true;
+        let mut go = false;
+        let mut refresh = false;
+        egui::Window::new(title).collapsible(false).resizable(false).default_width(460.).anchor(egui::Align2::CENTER_TOP, [0., 70.]).show(ctx, |ui| {
+            ui.add_enabled_ui(!working, |ui| {
+                // ---- local folder
+                match st.kind {
+                    SetupKind::Import => {
+                        ui.label("Folder on this computer");
+                        ui.horizontal(|ui| {
+                            let r = ui.add(egui::TextEdit::singleline(&mut st.folder).hint_text(muted("/path/to/notes")).desired_width(330.));
+                            let mut chosen = r.lost_focus();
+                            if ui.button("Browse…").clicked() {
+                                if let Some(f) = pick_folder(&st.folder) {
+                                    st.folder = f.display().to_string();
+                                    chosen = true;
+                                }
+                            }
+                            if chosen && !st.folder.trim().is_empty() {
+                                st.msg = None;
+                                match scan_folder(Path::new(st.folder.trim())) {
+                                    Ok(scan) => st.scan = Some((st.folder.trim().to_owned(), scan)),
+                                    Err(e) => {
+                                        st.scan = None;
+                                        st.msg = Some(e.to_string());
+                                    }
+                                }
+                            }
+                        });
+                        if !st.name_edited {
+                            st.name = Path::new(st.folder.trim()).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        }
+                        if let Some((_, scan)) = st.scan.as_ref().filter(|(f, _)| f == st.folder.trim()) {
+                            ui.label(muted(format!("{}, {} in all ({}).", plural(scan.notes, "note"), plural(scan.files, "file"), human_size(scan.bytes))));
+                            if !scan.problems.is_empty() {
+                                ui.label(egui::RichText::new(format!("{} can't be synced:", plural(scan.problems.len(), "file"))).color(p.red));
+                                egui::ScrollArea::vertical().max_height(120.).show(ui, |ui| {
+                                    for m in scan.problems.iter().take(50) {
+                                        ui.label(egui::RichText::new(m.as_str()).small().color(p.red));
+                                    }
+                                });
+                            }
+                        }
+                        ui.label(egui::RichText::new("Emerald works on the folder where it is. Nothing is moved or copied on this computer.").small().color(p.muted));
+                    }
+                    SetupKind::New | SetupKind::Server => {}
+                }
+                // ---- server
+                if st.kind == SetupKind::New || st.kind == SetupKind::Import {
+                    ui.add_space(6.);
+                    let label = if st.kind == SetupKind::Import { "Upload to my sync server and keep it in sync" } else { "Sync with my server" };
+                    ui.add_enabled(!from_env, egui::Checkbox::new(&mut st.sync, label));
+                }
+                if from_env {
+                    ui.label(egui::RichText::new("EMERALD_SERVER is set, so every vault syncs with the server and vault it names.").small().color(p.muted));
+                    st.sync = st.kind == SetupKind::Server;
+                }
+                if st.sync {
+                    ui.add_space(4.);
+                    if has_server {
+                        ui.horizontal(|ui| {
+                            refresh |= ui.radio_value(&mut st.same_server, true, format!("Same server as this vault ({current_server})")).changed();
+                        });
+                        refresh |= ui.radio_value(&mut st.same_server, false, "Another server").changed();
+                    }
+                    if !st.same_server {
+                        ui.label("Server address");
+                        ui.add(egui::TextEdit::singleline(&mut st.server).hint_text(muted("https://notes.example.org")).desired_width(360.));
+                        ui.label("Server token");
+                        ui.add(egui::TextEdit::singleline(&mut st.token).password(true).desired_width(360.));
+                    }
+                    ui.add_space(4.);
+                    ui.label(if st.kind == SetupKind::Server { "Vault on the server" } else { "Name on the server" });
+                    let r = ui.add(egui::TextEdit::singleline(&mut st.name).desired_width(300.));
+                    if r.changed() {
+                        st.name_edited = true;
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        if st.list_rx.is_some() {
+                            ui.spinner();
+                        } else if ui.small_button(if st.remote.is_some() { "Refresh list" } else { "List server vaults" }).clicked() {
+                            refresh = true;
+                        }
+                        if let Some(list) = &st.remote {
+                            if list.is_empty() {
+                                ui.label(egui::RichText::new("No named vaults on the server yet.").small().color(p.muted));
+                            }
+                            for n in list {
+                                let taken = st.kind != SetupKind::Server;
+                                let txt = egui::RichText::new(n.as_str()).color(if taken { p.muted } else { p.text });
+                                if ui.selectable_label(st.name.trim() == n, txt).on_hover_text(if taken { "Already on the server" } else { "Download this vault" }).clicked() && !taken {
+                                    st.name = n.clone();
+                                    st.name_edited = true;
+                                }
+                            }
+                        }
+                    });
+                    if st.kind != SetupKind::Server {
+                        ui.label(egui::RichText::new("Stored on the server under Vaults/<name>/, next to your other vaults.").small().color(p.muted));
+                    }
+                }
+                // ---- local folder for new / downloaded vaults
+                if st.kind != SetupKind::Import {
+                    if st.kind == SetupKind::New && !st.sync {
+                        ui.add_space(4.);
+                        ui.label("Name");
+                        if ui.add(egui::TextEdit::singleline(&mut st.name).desired_width(300.)).changed() {
+                            st.name_edited = true;
+                        }
+                    }
+                    if !st.folder_edited {
+                        st.folder = vaults_home().join(st.name.trim()).display().to_string();
+                    }
+                    ui.add_space(4.);
+                    ui.label("Folder on this computer");
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::TextEdit::singleline(&mut st.folder).desired_width(330.)).changed() {
+                            st.folder_edited = true;
+                        }
+                        if ui.button("Browse…").on_hover_text("Choose where the vault folder goes").clicked() {
+                            if let Some(f) = pick_folder(&st.folder) {
+                                st.folder = if is_empty_dir(&f) { f } else { f.join(st.name.trim()) }.display().to_string();
+                                st.folder_edited = true;
+                            }
+                        }
+                    });
+                    ui.label(egui::RichText::new("A new or empty folder.").small().color(p.muted));
+                }
+            });
+            if let Some(m) = &st.msg {
+                ui.add_space(4.);
+                ui.label(egui::RichText::new(m.as_str()).color(p.red));
+            }
+            ui.add_space(6.);
+            ui.horizontal(|ui| {
+                let label = match st.kind {
+                    SetupKind::Import => "Import",
+                    SetupKind::New => "Create vault",
+                    SetupKind::Server => "Download",
+                };
+                if working {
+                    ui.spinner();
+                    ui.label(muted("Checking the server…"));
+                } else {
+                    go = primary(ui, label).clicked();
+                    if ui.button("Cancel").clicked() {
+                        keep = false;
+                    }
+                }
+            });
+        });
+        if refresh {
+            st.remote = None;
+            self.list_remote(&mut st);
+        }
+        if go {
+            st.msg = None;
+            if let Err(e) = self.begin_setup(&mut st, ctx) {
+                st.msg = Some(friendly(&e));
+            }
+        }
+        if keep {
+            self.setup = Some(st);
+        } else if st.from_welcome {
+            self.welcome = true;
+        }
     }
 }
 

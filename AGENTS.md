@@ -30,4 +30,9 @@ Use an HTTP client that can read the token from the environment without displayi
 | Update | `PUT /file?name=<path>&base=<hash>` | Send the full revised note using the SHA-256 of the exact bytes read before editing. |
 | Delete | `DELETE /file?name=<path>&base=<hash>` | Use the hash of the version selected for removal. |
 
+| List vaults | `GET /vaults` | JSON array of named vault names (Emerald Server 2.1+). |
+| Create vault | `PUT /vaults/<name>` | Creates an empty named vault. Succeeds if it already exists. |
+
+The table's file endpoints act on the server's main vault. To use a named vault instead, put `/vaults/<name>` (URL-encoded, one path segment) in front of them, for example `GET /vaults/AI%20Memory/files` or `PUT /vaults/AI%20Memory/file?name=<path>&base=`. If the user wants memory kept apart from their notes vaults, agree on a dedicated vault name and record it with the folder agreement; `EMERALD_VAULT` can hold it in the runtime.
+
 Successful mutations return **204**. On **409**, another writer changed the note. Read it again and reapply only the intended edit, preserving the other changes. If the changes disagree, ask the user which fact to keep. On **401**, check the server URL and secret binding with the user. Direct server writes are immediately available to other agents using the same server.
