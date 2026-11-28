@@ -897,7 +897,7 @@ dependencies = [
 
 [[package]]
 name = "emerald"
-version = "1.2.9"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "axum",
