@@ -981,19 +981,28 @@ impl eframe::App for Notebook {
                             if self.doc.dirty && tab == self.doc.name {
                                 title.push_str(" ●")
                             }
-                            if ui.selectable_label(tab == self.doc.name, title).clicked() {
-                                open = Some(tab.clone());
-                            }
-                            if ui.add(egui::Button::new(egui::RichText::new("×").color(MUTED)).frame(false)).clicked() {
-                                self.tabs.retain(|t| t != &tab);
-                                if tab == self.doc.name {
-                                    open = self.tabs.last().cloned();
-                                    if open.is_none() {
-                                        self.doc = Document::default();
+                            let active = tab == self.doc.name;
+                            egui::Frame::new()
+                                .fill(if active { SIDE } else { Color32::TRANSPARENT })
+                                .corner_radius(egui::CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 })
+                                .inner_margin(egui::Margin::symmetric(12, 5))
+                                .show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.;
+                                    let col = if active { TEXT } else { MUTED };
+                                    let l = ui.add(egui::Label::new(egui::RichText::new(title).color(col)).selectable(false).sense(egui::Sense::click()));
+                                    if l.clicked() {
+                                        open = Some(tab.clone());
                                     }
-                                }
-                            }
-                            ui.add_space(6.);
+                                    if ui.add(egui::Button::new(egui::RichText::new("×").color(MUTED)).frame(false)).clicked() {
+                                        self.tabs.retain(|t| t != &tab);
+                                        if active {
+                                            open = self.tabs.last().cloned();
+                                            if open.is_none() {
+                                                self.doc = Document::default();
+                                            }
+                                        }
+                                    }
+                                });
                         }
                         if ui.add(egui::Button::new(egui::RichText::new("+").size(16.).color(MUTED)).frame(false)).clicked() {
                             open = Some(self.fresh())
@@ -1159,6 +1168,7 @@ impl eframe::App for Notebook {
                                 let r = ui.add(
                                     egui::TextEdit::multiline(&mut self.doc.text)
                                         .id(eid)
+                                        .frame(false)
                                         .hint_text("Start typing… type [[ to link a note")
                                         .desired_width(f32::INFINITY)
                                         .desired_rows(26),
