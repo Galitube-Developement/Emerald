@@ -42,6 +42,9 @@ fn main() -> eframe::Result<()> {
     };
     let options = eframe::NativeOptions {
         viewport,
+        // OpenGL flickers on some Windows drivers; DirectX via wgpu does not.
+        #[cfg(windows)]
+        renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
     eframe::run_native(
